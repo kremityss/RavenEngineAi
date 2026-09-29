@@ -6,6 +6,7 @@
 #import <Metal/Metal.h>
 #import <CoreImage/CoreImage.h>
 #import <mach-o/dyld.h>
+#import <dlfcn.h>
 #import <arpa/inet.h>
 #import <sys/socket.h>
 #import <netinet/in.h>
@@ -85,6 +86,21 @@ static CAMetalLayer *RavenFindMetalLayer(UIView *view) {
     return nil;
 }
 
+
+static NSURL *RavenSiblingURL(NSString *relativePath) {
+    Dl_info info = {0};
+    if (dladdr((const void *)&RavenDetectGameEngine, &info) == 0 || !info.dli_fname) {
+        return nil;
+    }
+    NSString *dylibPath = [NSString stringWithUTF8String:info.dli_fname];
+    NSString *dir = [dylibPath stringByDeletingLastPathComponent];
+    NSString *candidate = [dir stringByAppendingPathComponent:relativePath];
+    if ([[NSFileManager defaultManager] fileExistsAtPath:candidate]) {
+        return [NSURL fileURLWithPath:candidate isDirectory:YES];
+    }
+    return nil;
+}
+
 @interface ScreenAnalyzer : NSObject
 @property (nonatomic, strong) MLModel *model;
 @property (nonatomic, strong) VNCoreMLModel *vnModel;
@@ -143,24 +159,85 @@ static CAMetalLayer *RavenFindMetalLayer(UIView *view) {
 
 #pragma mark - Analyzer Setup
 
-- (void)startAnalyzer {
-    NSString *modelPath = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/SafeModel.mlmodelc"];
-    NSURL *modelURL = [NSURL fileURLWithPath:modelPath isDirectory:YES];
+- (NSURL *)findRavenModelURL {
+    NSFileManager *fm = [NSFileManager defaultManager];
 
-    NSError *loadErr = nil;
-    self.model = [MLModel modelWithContentsOfURL:modelURL error:&loadErr];
+    NSArray<NSString *> *relativePaths = @[
+        @"RavenModel.mlmodelc",
+        @"RavenModel.mlpackage",
+        @"Resources/RavenModel.mlmodelc",
+        @"Resources/RavenModel.mlpackage"
+    ];
 
-    if (!self.model) {
-        NSLog(@"[RAVEN] Failed to load CoreML model: %@", loadErr);
-        [self attachUIOnly];
-        return;
+    for (NSString *relativePath in relativePaths) {
+        NSURL *url = RavenSiblingURL(relativePath);
+        if (url && [fm fileExistsAtPath:url.path]) return url;
     }
 
-    NSError *vnErr = nil;
-    self.vnModel = [VNCoreMLModel modelForMLModel:self.model error:&vnErr];
+    NSURL *compiled = [[NSBundle mainBundle] URLForResource:@"RavenModel"
+                                              withExtension:@"mlmodelc"];
+    if (compiled) return compiled;
 
+    NSURL *package = [[NSBundle mainBundle] URLForResource:@"RavenModel"
+                                             withExtension:@"mlpackage"];
+    if (package) return package;
+
+    NSString *documents = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents"];
+    for (NSString *name in @[@"RavenModel.mlmodelc", @"RavenModel.mlpackage"]) {
+        NSString *path = [documents stringByAppendingPathComponent:name];
+        if ([fm fileExistsAtPath:path]) {
+            return [NSURL fileURLWithPath:path isDirectory:YES];
+        }
+    }
+
+    return nil;
+}
+
+- (BOOL)loadRavenModel {
+    NSURL *sourceURL = [self findRavenModelURL];
+    if (!sourceURL) {
+        NSLog(@"[RAVEN] RavenModel not found");
+        return NO;
+    }
+
+    NSURL *loadURL = sourceURL;
+    NSString *extension = sourceURL.pathExtension.lowercaseString;
+
+    if ([extension isEqualToString:@"mlpackage"] ||
+        [extension isEqualToString:@"mlmodel"]) {
+        NSError *compileError = nil;
+        loadURL = [MLModel compileModelAtURL:sourceURL error:&compileError];
+        if (!loadURL) {
+            NSLog(@"[RAVEN] CoreML compile failed: %@", compileError);
+            return NO;
+        }
+    }
+
+    MLModelConfiguration *configuration = [[MLModelConfiguration alloc] init];
+    configuration.computeUnits = MLComputeUnitsAll;
+
+    NSError *loadError = nil;
+    self.model = [MLModel modelWithContentsOfURL:loadURL
+                                   configuration:configuration
+                                           error:&loadError];
+    if (!self.model) {
+        NSLog(@"[RAVEN] CoreML load failed: %@", loadError);
+        return NO;
+    }
+
+    NSError *visionError = nil;
+    self.vnModel = [VNCoreMLModel modelForMLModel:self.model error:&visionError];
     if (!self.vnModel) {
-        NSLog(@"[RAVEN] Failed to create VNCoreMLModel: %@", vnErr);
+        NSLog(@"[RAVEN] Vision model creation failed: %@", visionError);
+        return NO;
+    }
+
+    NSLog(@"[RAVEN] CoreML ready: %@", sourceURL.lastPathComponent);
+    return YES;
+}
+
+- (void)startAnalyzer {
+    if (![self loadRavenModel]) {
         [self attachUIOnly];
         return;
     }
@@ -179,34 +256,37 @@ static CAMetalLayer *RavenFindMetalLayer(UIView *view) {
                 return;
             }
 
-            BOOL handled = NO;
+            MLMultiArray *coordinates = nil;
+            MLMultiArray *confidence = nil;
 
             for (VNObservation *obs in req.results) {
-                if (![obs isKindOfClass:[VNCoreMLFeatureValueObservation class]]) {
-                    continue;
-                }
-
-                VNCoreMLFeatureValueObservation *fvObs =
+                if (![obs isKindOfClass:[VNCoreMLFeatureValueObservation class]]) continue;
+                VNCoreMLFeatureValueObservation *featureObs =
                     (VNCoreMLFeatureValueObservation *)obs;
+                MLMultiArray *array = featureObs.featureValue.multiArrayValue;
+                if (!array) continue;
 
-                MLMultiArray *out = fvObs.featureValue.multiArrayValue;
-                if (!out) continue;
-
-                handled = YES;
-
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    [strongSelf drawDetections:out];
-                    strongSelf.isProcessing = NO;
-                });
-
-                break;
+                if ([featureObs.featureName isEqualToString:@"coordinates"]) {
+                    coordinates = array;
+                } else if ([featureObs.featureName isEqualToString:@"confidence"]) {
+                    confidence = array;
+                }
             }
 
-            if (!handled) {
+            if (!coordinates || !confidence) {
+                NSLog(@"[RAVEN] Missing NMS outputs (coordinates/confidence)");
                 strongSelf.isProcessing = NO;
+                return;
             }
+
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [strongSelf drawNMSCoordinates:coordinates confidence:confidence];
+                strongSelf.isProcessing = NO;
+            });
         }
     ];
+
+    self.vnRequest.imageCropAndScaleOption = VNImageCropAndScaleOptionScaleFill;
 
     self.overlayView = [[UIView alloc] initWithFrame:[UIScreen mainScreen].bounds];
     self.overlayView.userInteractionEnabled = NO;
@@ -226,7 +306,6 @@ static CAMetalLayer *RavenFindMetalLayer(UIView *view) {
     [self.overlayView.layer addSublayer:self.overlayShape];
 
     UIWindow *win = [self currentKeyWindow];
-
     if (win) {
         dispatch_async(dispatch_get_main_queue(), ^{
             [win addSubview:self.overlayView];
@@ -261,31 +340,21 @@ static CAMetalLayer *RavenFindMetalLayer(UIView *view) {
         ScreenAnalyzer *strongSelf = weakSelf;
         if (!strongSelf) return;
 
-        NSLog(@"[RAVEN] Toggle %@ = %@",
-              feature,
-              enabled ? @"ON" : @"OFF");
-
         if ([feature isEqualToString:@"ESP Master"]) {
             strongSelf.espEnabled = enabled;
             strongSelf.overlayView.hidden = !enabled;
-        }
-        else if ([feature isEqualToString:@"Box ESP"]) {
+        } else if ([feature isEqualToString:@"Box ESP"]) {
             strongSelf.boxESPEnabled = enabled;
             strongSelf.overlayShape.hidden = !enabled;
-        }
-        else if ([feature isEqualToString:@"CoreML"]) {
+        } else if ([feature isEqualToString:@"CoreML"]) {
             strongSelf.coreMLEnabled = enabled;
-        }
-        else if ([feature isEqualToString:@"AScript Bridge"]) {
+        } else if ([feature isEqualToString:@"AScript Bridge"]) {
             strongSelf.ascriptEnabled = enabled;
-        }
-        else if ([feature isEqualToString:@"AI Aim"]) {
+        } else if ([feature isEqualToString:@"AI Aim"]) {
             strongSelf.aiAimEnabled = enabled;
-        }
-        else if ([feature isEqualToString:@"Unity Detection"]) {
+        } else if ([feature isEqualToString:@"Unity Detection"]) {
             strongSelf.unityDetectionEnabled = enabled;
-        }
-        else if ([feature isEqualToString:@"UE4 / UE5 Detection"]) {
+        } else if ([feature isEqualToString:@"UE4 / UE5 Detection"]) {
             strongSelf.unrealDetectionEnabled = enabled;
         }
     };
@@ -294,20 +363,15 @@ static CAMetalLayer *RavenFindMetalLayer(UIView *view) {
         ScreenAnalyzer *strongSelf = weakSelf;
         if (!strongSelf) return;
 
-        NSLog(@"[RAVEN] Slider %@ = %.3f", feature, value);
-
         if ([feature isEqualToString:@"ESP Thickness"]) {
             strongSelf.espThickness = value;
             strongSelf.overlayShape.lineWidth = value;
-        }
-        else if ([feature isEqualToString:@"ESP Opacity"]) {
+        } else if ([feature isEqualToString:@"ESP Opacity"]) {
             strongSelf.espOpacity = value;
             strongSelf.overlayShape.opacity = value;
-        }
-        else if ([feature isEqualToString:@"Confidence"]) {
+        } else if ([feature isEqualToString:@"Confidence"]) {
             strongSelf.confidenceThreshold = value;
-        }
-        else if ([feature isEqualToString:@"FOV"]) {
+        } else if ([feature isEqualToString:@"FOV"]) {
             strongSelf.fovRadius = value;
         }
     };
@@ -493,65 +557,67 @@ static CAMetalLayer *RavenFindMetalLayer(UIView *view) {
 
 #pragma mark - Detection Drawing
 
-- (void)drawDetections:(MLMultiArray *)output {
-    if (!output) {
+- (double)valueFromArray:(MLMultiArray *)array index:(NSInteger)index {
+    if (!array || index < 0 || index >= array.count) return 0.0;
+    return [array[index] doubleValue];
+}
+
+- (void)drawNMSCoordinates:(MLMultiArray *)coordinates
+                 confidence:(MLMultiArray *)confidence {
+    if (!coordinates || !confidence) {
         self.overlayShape.path = nil;
         return;
     }
 
-    const int stride = 6;
-    long total = output.count / stride;
-
-    if (total <= 0) {
+    NSInteger detectionCount = coordinates.count / 4;
+    if (detectionCount <= 0) {
         self.overlayShape.path = nil;
         return;
     }
+
+    NSInteger confidenceColumns =
+        MAX((NSInteger)1, confidence.count / MAX((NSInteger)1, detectionCount));
 
     CGSize screenSize = UIScreen.mainScreen.bounds.size;
-
-    CGFloat scaleX = screenSize.width / 640.0;
-    CGFloat scaleY = screenSize.height / 640.0;
-
-    UIBezierPath *combined = [UIBezierPath bezierPath];
-
-    float bestConf = 0.0f;
-    CGRect bestRect = CGRectZero;
-
+    CGRect screenBounds = CGRectMake(0, 0, screenSize.width, screenSize.height);
     CGPoint screenCenter = CGPointMake(screenSize.width * 0.5,
                                        screenSize.height * 0.5);
 
+    UIBezierPath *combined = [UIBezierPath bezierPath];
+    float bestConf = 0.0f;
     CGFloat bestDistance = CGFLOAT_MAX;
+    CGRect bestRect = CGRectZero;
 
-    for (long i = 0; i < total; i++) {
-        long base = i * stride;
+    for (NSInteger i = 0; i < detectionCount; i++) {
+        NSInteger base = i * 4;
 
-        if (base + 4 >= output.count) break;
+        double x = [self valueFromArray:coordinates index:base + 0];
+        double y = [self valueFromArray:coordinates index:base + 1];
+        double w = [self valueFromArray:coordinates index:base + 2];
+        double h = [self valueFromArray:coordinates index:base + 3];
 
-        float x = [output[base + 0] floatValue];
-        float y = [output[base + 1] floatValue];
-        float w = [output[base + 2] floatValue];
-        float h = [output[base + 3] floatValue];
-        float conf = [output[base + 4] floatValue];
+        float conf = 0.0f;
+        NSInteger confBase = i * confidenceColumns;
+        for (NSInteger col = 0; col < confidenceColumns; col++) {
+            NSInteger idx = confBase + col;
+            if (idx >= confidence.count) break;
+            conf = MAX(conf, (float)[self valueFromArray:confidence index:idx]);
+        }
 
-        if (conf < self.confidenceThreshold) continue;
+        if (conf < self.confidenceThreshold || w <= 0.0 || h <= 0.0) continue;
 
-        CGRect rect640 = CGRectMake(x - (w * 0.5f),
-                                    y - (h * 0.5f),
-                                    w,
-                                    h);
+        CGFloat centerX = (CGFloat)x * screenSize.width;
+        CGFloat centerY = (CGFloat)y * screenSize.height;
+        CGFloat boxW = (CGFloat)w * screenSize.width;
+        CGFloat boxH = (CGFloat)h * screenSize.height;
 
-        CGRect rectScreen = CGRectMake(rect640.origin.x * scaleX,
-                                       rect640.origin.y * scaleY,
-                                       rect640.size.width * scaleX,
-                                       rect640.size.height * scaleY);
+        CGRect rectScreen = CGRectMake(centerX - boxW * 0.5,
+                                       centerY - boxH * 0.5,
+                                       boxW,
+                                       boxH);
 
-        rectScreen = CGRectIntersection(rectScreen,
-                                        CGRectMake(0,
-                                                   0,
-                                                   screenSize.width,
-                                                   screenSize.height));
-
-        if (CGRectIsEmpty(rectScreen)) continue;
+        rectScreen = CGRectIntersection(rectScreen, screenBounds);
+        if (CGRectIsNull(rectScreen) || CGRectIsEmpty(rectScreen)) continue;
 
         if (self.espEnabled && self.boxESPEnabled) {
             [combined appendPath:[UIBezierPath bezierPathWithRect:rectScreen]];
@@ -559,31 +625,27 @@ static CAMetalLayer *RavenFindMetalLayer(UIView *view) {
 
         CGPoint boxCenter = CGPointMake(CGRectGetMidX(rectScreen),
                                         CGRectGetMidY(rectScreen));
-
         CGFloat dx = boxCenter.x - screenCenter.x;
         CGFloat dy = boxCenter.y - screenCenter.y;
         CGFloat distance = hypot(dx, dy);
+        BOOL inFOV = (self.fovRadius <= 0.0 || distance <= self.fovRadius);
 
-        // Prefer targets inside FOV and closer to screen center.
-        BOOL inFOV = (self.fovRadius <= 0 || distance <= self.fovRadius);
-
-        if (inFOV) {
-            if (distance < bestDistance ||
-                (fabs(distance - bestDistance) < 1.0 && conf > bestConf)) {
-                bestDistance = distance;
-                bestConf = conf;
-                bestRect = rectScreen;
-            }
+        if (inFOV &&
+            (distance < bestDistance ||
+             (fabs(distance - bestDistance) < 1.0 && conf > bestConf))) {
+            bestDistance = distance;
+            bestConf = conf;
+            bestRect = rectScreen;
         }
     }
 
     self.overlayShape.path = combined.CGPath;
 
-    if (bestConf >= self.confidenceThreshold &&
-        !CGRectIsEmpty(bestRect)) {
+    if (bestConf >= self.confidenceThreshold && !CGRectIsEmpty(bestRect)) {
         [self sendTargetToAScript:bestRect confidence:bestConf];
     }
 }
+
 
 @end
 
