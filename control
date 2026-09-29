@@ -1,0 +1,9 @@
+Package: com.kremcheats.ravenengineai
+Name: RavenEngineAi
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: RavenEngineAi CoreML/Vision overlay runtime.
+Maintainer: Kremityss
+Author: Kremityss
+Section: Tweaks
+Depends: firmware (>= 15.0)
