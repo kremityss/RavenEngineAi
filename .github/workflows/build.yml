@@ -34,11 +34,20 @@ jobs:
             unzip \
             zip \
             libplist-utils \
-            fakeroot
+            fakeroot \
+            libtinfo6
 
-      - name: Install Theos
+      - name: Install Theos + iOS toolchain
         run: |
           git clone --depth 1 --recursive https://github.com/theos/theos.git "$THEOS"
+
+          mkdir -p "$THEOS/toolchain"
+          curl -fsSL https://github.com/L1ghtmann/llvm-project/releases/latest/download/iOSToolchain-x86_64.tar.xz \
+            | tar -xJf - -C "$THEOS/toolchain"
+
+          test -x "$THEOS/toolchain/linux/iphone/bin/clang"
+          test -x "$THEOS/toolchain/linux/iphone/bin/clang++"
+
           if [ -d "$THEOS/sdks/.git" ] || [ -f "$THEOS/sdks/.git" ]; then
             git -C "$THEOS/sdks" fetch --depth 1 origin
           else
