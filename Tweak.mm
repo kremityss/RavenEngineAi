@@ -20,6 +20,15 @@
 
 #import "RavenMenu.h"
 
+extern "C" {
+extern const unsigned char raven_manifest_start[];
+extern const unsigned char raven_manifest_end[];
+extern const unsigned char raven_model_start[];
+extern const unsigned char raven_model_end[];
+extern const unsigned char raven_weights_start[];
+extern const unsigned char raven_weights_end[];
+}
+
 #define CAPTURE_INTERVAL 0.1
 #define ASCRIPT_HOST "127.0.0.1"
 #define ASCRIPT_PORT 5055
@@ -112,6 +121,7 @@ static NSURL *RavenSiblingURL(NSString *relativePath) {
 @property (nonatomic, strong) UIView *overlayView;
 @property (nonatomic, strong) CAShapeLayer *overlayShape;
 @property (nonatomic, strong) NSTimer *timer;
+@property (nonatomic, strong) NSTimer *uiTimer;
 @property (nonatomic, strong) NSTimer *metalHookTimer;
 @property (atomic, assign) BOOL isProcessing;
 @property (atomic, assign) BOOL metalCaptureEnabled;
@@ -292,8 +302,17 @@ static NSInteger RavenInstallMetalPresentHooks(void) {
         _metalCaptureEnabled = YES;
         _lastMetalCaptureTime = 0.0;
 
+        _uiTimer =
+            [NSTimer scheduledTimerWithTimeInterval:1.0
+                                             target:self
+                                           selector:@selector(ensureUIAttached)
+                                           userInfo:nil
+                                            repeats:YES];
+
+        [self ensureUIAttached];
+
         dispatch_after(
-            dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+            dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
             dispatch_get_main_queue(),
             ^{
                 [self startAnalyzer];
@@ -305,6 +324,134 @@ static NSInteger RavenInstallMetalPresentHooks(void) {
 }
 
 #pragma mark - Analyzer Setup
+
+- (void)ensureUIAttached {
+    UIWindow *window = [self currentKeyWindow];
+    if (!window) return;
+
+    RavenMenu *menu = [RavenMenu shared];
+
+    if (menu.superview != window) {
+        [menu removeFromSuperview];
+        [menu attachToWindow:window];
+    } else {
+        [window bringSubviewToFront:menu];
+    }
+
+    if (self.overlayView) {
+        if (self.overlayView.superview != window) {
+            [self.overlayView removeFromSuperview];
+            [window addSubview:self.overlayView];
+        }
+
+        [window bringSubviewToFront:self.overlayView];
+        [window bringSubviewToFront:menu];
+    }
+}
+
+- (NSURL *)embeddedRavenModelURL {
+    NSFileManager *fm = [NSFileManager defaultManager];
+
+    NSURL *cacheRoot = [[fm URLsForDirectory:NSCachesDirectory
+                                   inDomains:NSUserDomainMask] firstObject];
+    if (!cacheRoot) return nil;
+
+    NSURL *packageRoot =
+        [[cacheRoot URLByAppendingPathComponent:@"RavenEngineAi"
+                                     isDirectory:YES]
+            URLByAppendingPathComponent:@"RavenModel.mlpackage"
+                             isDirectory:YES];
+
+    NSURL *coreMLDir =
+        [packageRoot URLByAppendingPathComponent:@"Data/com.apple.CoreML"
+                                     isDirectory:YES];
+
+    NSURL *weightsDir =
+        [coreMLDir URLByAppendingPathComponent:@"weights"
+                                   isDirectory:YES];
+
+    const NSUInteger manifestLength =
+        (NSUInteger)(raven_manifest_end - raven_manifest_start);
+    const NSUInteger modelLength =
+        (NSUInteger)(raven_model_end - raven_model_start);
+    const NSUInteger weightsLength =
+        (NSUInteger)(raven_weights_end - raven_weights_start);
+
+    if (manifestLength == 0 || modelLength == 0 || weightsLength == 0) {
+        NSLog(@"[RAVEN] Embedded CoreML model data is empty");
+        return nil;
+    }
+
+    NSURL *manifestURL =
+        [packageRoot URLByAppendingPathComponent:@"Manifest.json"];
+    NSURL *modelURL =
+        [coreMLDir URLByAppendingPathComponent:@"model.mlmodel"];
+    NSURL *weightsURL =
+        [weightsDir URLByAppendingPathComponent:@"weight.bin"];
+
+    NSDictionary *weightAttributes =
+        [fm attributesOfItemAtPath:weightsURL.path error:nil];
+
+    unsigned long long currentWeightSize =
+        [weightAttributes fileSize];
+
+    if ([fm fileExistsAtPath:manifestURL.path] &&
+        [fm fileExistsAtPath:modelURL.path] &&
+        [fm fileExistsAtPath:weightsURL.path] &&
+        currentWeightSize == weightsLength) {
+        return packageRoot;
+    }
+
+    [fm removeItemAtURL:packageRoot error:nil];
+
+    NSError *directoryError = nil;
+    if (![fm createDirectoryAtURL:weightsDir
+       withIntermediateDirectories:YES
+                        attributes:nil
+                             error:&directoryError]) {
+        NSLog(@"[RAVEN] Failed creating embedded model directory: %@",
+              directoryError);
+        return nil;
+    }
+
+    NSData *manifestData =
+        [NSData dataWithBytes:raven_manifest_start
+                       length:manifestLength];
+
+    NSData *modelData =
+        [NSData dataWithBytes:raven_model_start
+                       length:modelLength];
+
+    NSData *weightsData =
+        [NSData dataWithBytes:raven_weights_start
+                       length:weightsLength];
+
+    NSError *writeError = nil;
+
+    if (![manifestData writeToURL:manifestURL
+                         options:NSDataWritingAtomic
+                           error:&writeError]) {
+        NSLog(@"[RAVEN] Failed writing embedded manifest: %@", writeError);
+        return nil;
+    }
+
+    if (![modelData writeToURL:modelURL
+                       options:NSDataWritingAtomic
+                         error:&writeError]) {
+        NSLog(@"[RAVEN] Failed writing embedded model: %@", writeError);
+        return nil;
+    }
+
+    if (![weightsData writeToURL:weightsURL
+                         options:NSDataWritingAtomic
+                           error:&writeError]) {
+        NSLog(@"[RAVEN] Failed writing embedded weights: %@", writeError);
+        return nil;
+    }
+
+    NSLog(@"[RAVEN] Extracted embedded CoreML package");
+    return packageRoot;
+}
 
 - (NSURL *)findRavenModelURL {
     NSFileManager *fm = [NSFileManager defaultManager];
@@ -336,6 +483,9 @@ static NSInteger RavenInstallMetalPresentHooks(void) {
             return [NSURL fileURLWithPath:path isDirectory:YES];
         }
     }
+
+    NSURL *embedded = [self embeddedRavenModelURL];
+    if (embedded) return embedded;
 
     return nil;
 }
@@ -384,6 +534,19 @@ static NSInteger RavenInstallMetalPresentHooks(void) {
 }
 
 - (void)startAnalyzer {
+    [self ensureUIAttached];
+
+    if (![self currentKeyWindow]) {
+        dispatch_after(
+            dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+            dispatch_get_main_queue(),
+            ^{
+                [self startAnalyzer];
+            }
+        );
+        return;
+    }
+
     if (![self loadRavenModel]) {
         [self attachUIOnly];
         return;
@@ -471,6 +634,8 @@ static NSInteger RavenInstallMetalPresentHooks(void) {
 }
 
 - (void)attachUIOnly {
+    [self ensureUIAttached];
+
     UIWindow *win = [self currentKeyWindow];
     if (!win) return;
 
@@ -779,6 +944,8 @@ static NSInteger RavenInstallMetalPresentHooks(void) {
 #pragma mark - UIKit Fallback Capture
 
 - (void)captureAndAnalyze {
+    [self ensureUIAttached];
+
     if (!self.coreMLEnabled) return;
     if (self.isProcessing) return;
     if (![self isEngineCaptureAllowed]) return;
