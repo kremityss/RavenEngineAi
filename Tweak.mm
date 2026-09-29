@@ -4,6 +4,9 @@
 #import <Foundation/Foundation.h>
 #import <QuartzCore/QuartzCore.h>
 #import <Metal/Metal.h>
+#import <MetalPerformanceShaders/MetalPerformanceShaders.h>
+#import <CoreVideo/CoreVideo.h>
+#import <objc/runtime.h>
 #import <CoreImage/CoreImage.h>
 #import <mach-o/dyld.h>
 #import <dlfcn.h>
@@ -108,7 +111,13 @@ static NSURL *RavenSiblingURL(NSString *relativePath) {
 @property (nonatomic, strong) UIView *overlayView;
 @property (nonatomic, strong) CAShapeLayer *overlayShape;
 @property (nonatomic, strong) NSTimer *timer;
+@property (nonatomic, strong) NSTimer *metalHookTimer;
 @property (atomic, assign) BOOL isProcessing;
+@property (atomic, assign) BOOL metalCaptureEnabled;
+@property (atomic, assign) CFTimeInterval lastMetalCaptureTime;
+@property (nonatomic, strong) id<MTLDevice> metalCaptureDevice;
+@property (nonatomic, strong) id<MTLTexture> metalCaptureTexture;
+@property (nonatomic, strong) MPSImageBilinearScale *metalScaler;
 
 @property (atomic, assign) BOOL espEnabled;
 @property (atomic, assign) BOOL boxESPEnabled;
@@ -122,7 +131,142 @@ static NSURL *RavenSiblingURL(NSString *relativePath) {
 @property (atomic, assign) CGFloat espThickness;
 @property (atomic, assign) CGFloat espOpacity;
 @property (atomic, assign) CGFloat fovRadius;
+
+- (void)captureMetalCommandBuffer:(id<MTLCommandBuffer>)commandBuffer
+                         drawable:(id<CAMetalDrawable>)drawable;
 @end
+
+static char kRavenPresentDrawableHooked;
+static char kRavenPresentAtTimeHooked;
+static char kRavenPresentAfterDurationHooked;
+
+static Method RavenOwnMethod(Class cls, SEL selector) {
+    unsigned int count = 0;
+    Method *methods = class_copyMethodList(cls, &count);
+    Method found = NULL;
+
+    for (unsigned int i = 0; i < count; i++) {
+        if (method_getName(methods[i]) == selector) {
+            found = methods[i];
+            break;
+        }
+    }
+
+    if (methods) free(methods);
+    return found;
+}
+
+static BOOL RavenInstallPresentHook(Class cls,
+                                    SEL selector,
+                                    NSInteger variant,
+                                    const void *markerKey) {
+    if (objc_getAssociatedObject((id)cls, markerKey)) return NO;
+
+    Method method = RavenOwnMethod(cls, selector);
+    if (!method) return NO;
+
+    IMP original = method_getImplementation(method);
+    if (!original) return NO;
+
+    SEL capturedSelector = selector;
+    IMP replacement = NULL;
+
+    if (variant == 0) {
+        replacement = imp_implementationWithBlock(^void(id commandBuffer,
+                                                         id<CAMetalDrawable> drawable) {
+            ScreenAnalyzer *currentAnalyzer = analyzer;
+            if (currentAnalyzer) {
+                [currentAnalyzer captureMetalCommandBuffer:(id<MTLCommandBuffer>)commandBuffer
+                                                   drawable:drawable];
+            }
+
+            ((void (*)(id, SEL, id<CAMetalDrawable>))original)(
+                commandBuffer,
+                capturedSelector,
+                drawable
+            );
+        });
+    } else {
+        replacement = imp_implementationWithBlock(^void(id commandBuffer,
+                                                         id<CAMetalDrawable> drawable,
+                                                         CFTimeInterval value) {
+            ScreenAnalyzer *currentAnalyzer = analyzer;
+            if (currentAnalyzer) {
+                [currentAnalyzer captureMetalCommandBuffer:(id<MTLCommandBuffer>)commandBuffer
+                                                   drawable:drawable];
+            }
+
+            ((void (*)(id, SEL, id<CAMetalDrawable>, CFTimeInterval))original)(
+                commandBuffer,
+                capturedSelector,
+                drawable,
+                value
+            );
+        });
+    }
+
+    if (!replacement) return NO;
+
+    method_setImplementation(method, replacement);
+    objc_setAssociatedObject((id)cls,
+                             markerKey,
+                             @YES,
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return YES;
+}
+
+static NSInteger RavenInstallMetalPresentHooks(void) {
+    int classCount = objc_getClassList(NULL, 0);
+    if (classCount <= 0) return 0;
+
+    Class *classes = (Class *)calloc((size_t)classCount, sizeof(Class));
+    if (!classes) return 0;
+
+    classCount = objc_getClassList(classes, classCount);
+    Protocol *commandBufferProtocol = @protocol(MTLCommandBuffer);
+    NSInteger installed = 0;
+
+    SEL present = @selector(presentDrawable:);
+    SEL atTime = @selector(presentDrawable:atTime:);
+    SEL afterDuration =
+        NSSelectorFromString(@"presentDrawable:afterMinimumDuration:");
+
+    for (int i = 0; i < classCount; i++) {
+        Class cls = classes[i];
+        if (!cls) continue;
+
+        const char *name = class_getName(cls);
+        BOOL looksLikeCommandBuffer =
+            class_conformsToProtocol(cls, commandBufferProtocol) ||
+            (name && strstr(name, "CommandBuffer"));
+
+        if (!looksLikeCommandBuffer) continue;
+
+        if (RavenInstallPresentHook(cls,
+                                    present,
+                                    0,
+                                    &kRavenPresentDrawableHooked)) {
+            installed++;
+        }
+
+        if (RavenInstallPresentHook(cls,
+                                    atTime,
+                                    1,
+                                    &kRavenPresentAtTimeHooked)) {
+            installed++;
+        }
+
+        if (RavenInstallPresentHook(cls,
+                                    afterDuration,
+                                    1,
+                                    &kRavenPresentAfterDurationHooked)) {
+            installed++;
+        }
+    }
+
+    free(classes);
+    return installed;
+}
 
 @implementation ScreenAnalyzer
 
@@ -144,6 +288,8 @@ static NSURL *RavenSiblingURL(NSString *relativePath) {
         _espThickness = 2.0;
         _espOpacity = 0.95;
         _fovRadius = 150.0;
+        _metalCaptureEnabled = YES;
+        _lastMetalCaptureTime = 0.0;
 
         dispatch_after(
             dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
@@ -314,6 +460,8 @@ static NSURL *RavenSiblingURL(NSString *relativePath) {
         });
     }
 
+    [self startMetalCaptureRuntime];
+
     self.timer = [NSTimer scheduledTimerWithTimeInterval:CAPTURE_INTERVAL
                                                    target:self
                                                  selector:@selector(captureAndAnalyze)
@@ -404,89 +552,299 @@ static NSURL *RavenSiblingURL(NSString *relativePath) {
     return nil;
 }
 
-#pragma mark - Capture
+#pragma mark - Metal Capture
+
+- (BOOL)isEngineCaptureAllowed {
+    RavenGameEngine engine = RavenDetectGameEngine();
+
+    if (engine == RavenGameEngineUnity) {
+        return self.unityDetectionEnabled;
+    }
+
+    if (engine == RavenGameEngineUnreal4 ||
+        engine == RavenGameEngineUnreal5) {
+        return self.unrealDetectionEnabled;
+    }
+
+    return YES;
+}
+
+- (void)startMetalCaptureRuntime {
+    [self refreshMetalCaptureRuntime];
+
+    self.metalHookTimer =
+        [NSTimer scheduledTimerWithTimeInterval:2.0
+                                         target:self
+                                       selector:@selector(refreshMetalCaptureRuntime)
+                                       userInfo:nil
+                                        repeats:YES];
+}
+
+- (void)refreshMetalCaptureRuntime {
+    if (!self.metalCaptureEnabled) return;
+
+    NSInteger installed = RavenInstallMetalPresentHooks();
+    if (installed > 0) {
+        NSLog(@"[RAVEN] Installed %ld Metal present hook(s)",
+              (long)installed);
+    }
+
+    UIWindow *window = [self currentKeyWindow];
+    if (!window) return;
+
+    CAMetalLayer *metalLayer = RavenFindMetalLayer(window);
+    if (!metalLayer) return;
+
+    if (metalLayer.framebufferOnly) {
+        metalLayer.framebufferOnly = NO;
+        NSLog(@"[RAVEN] CAMetalLayer framebufferOnly disabled for AI capture");
+    }
+}
+
+- (BOOL)isSupportedMetalPixelFormat:(MTLPixelFormat)format {
+    return format == MTLPixelFormatBGRA8Unorm ||
+           format == MTLPixelFormatBGRA8Unorm_sRGB;
+}
+
+- (void)captureMetalCommandBuffer:(id<MTLCommandBuffer>)commandBuffer
+                         drawable:(id<CAMetalDrawable>)drawable {
+    if (!self.metalCaptureEnabled ||
+        !self.coreMLEnabled ||
+        !commandBuffer ||
+        !drawable ||
+        ![self isEngineCaptureAllowed]) {
+        return;
+    }
+
+    id<MTLTexture> source = drawable.texture;
+    if (!source || source.width < 320 || source.height < 320) return;
+
+    // A framebuffer-only CAMetalDrawable cannot be sampled by MPS.
+    // refreshMetalCaptureRuntime disables framebufferOnly on the engine's
+    // CAMetalLayer so future drawables become readable.
+    if ((source.usage & MTLTextureUsageShaderRead) == 0) return;
+    if (![self isSupportedMetalPixelFormat:source.pixelFormat]) return;
+
+    CFTimeInterval now = CACurrentMediaTime();
+
+    @synchronized (self) {
+        if (self.isProcessing) return;
+        if ((now - self.lastMetalCaptureTime) < CAPTURE_INTERVAL) return;
+
+        self.isProcessing = YES;
+        self.lastMetalCaptureTime = now;
+    }
+
+    id<MTLDevice> device = source.device;
+    if (!device) {
+        self.isProcessing = NO;
+        return;
+    }
+
+    const NSUInteger targetWidth = 640;
+    const NSUInteger targetHeight = 640;
+
+    BOOL needsTexture =
+        !self.metalCaptureTexture ||
+        self.metalCaptureDevice != device ||
+        self.metalCaptureTexture.pixelFormat != source.pixelFormat ||
+        self.metalCaptureTexture.width != targetWidth ||
+        self.metalCaptureTexture.height != targetHeight;
+
+    if (needsTexture) {
+        MTLTextureDescriptor *descriptor =
+            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:source.pixelFormat
+                                                               width:targetWidth
+                                                              height:targetHeight
+                                                           mipmapped:NO];
+
+        descriptor.storageMode = MTLStorageModeShared;
+        descriptor.usage =
+            MTLTextureUsageShaderRead |
+            MTLTextureUsageShaderWrite;
+
+        self.metalCaptureTexture =
+            [device newTextureWithDescriptor:descriptor];
+
+        if (!self.metalCaptureTexture) {
+            self.isProcessing = NO;
+            return;
+        }
+
+        self.metalCaptureTexture.label = @"RavenEngineAi Capture 640";
+        self.metalCaptureDevice = device;
+        self.metalScaler =
+            [[MPSImageBilinearScale alloc] initWithDevice:device];
+    }
+
+    id<MTLTexture> captureTexture = self.metalCaptureTexture;
+
+    @try {
+        [self.metalScaler encodeToCommandBuffer:commandBuffer
+                                  sourceTexture:source
+                             destinationTexture:captureTexture];
+    }
+    @catch (NSException *exception) {
+        NSLog(@"[RAVEN] Metal capture encode failed: %@",
+              exception.reason);
+        self.isProcessing = NO;
+        return;
+    }
+
+    __weak ScreenAnalyzer *weakSelf = self;
+
+    [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> completedBuffer) {
+        ScreenAnalyzer *strongSelf = weakSelf;
+        if (!strongSelf) return;
+
+        if (completedBuffer.status == MTLCommandBufferStatusError) {
+            NSLog(@"[RAVEN] Metal command buffer failed during capture: %@",
+                  completedBuffer.error);
+            strongSelf.isProcessing = NO;
+            return;
+        }
+
+        [strongSelf processMetalTexture:captureTexture];
+    }];
+}
+
+- (void)processMetalTexture:(id<MTLTexture>)texture {
+    if (!texture) {
+        self.isProcessing = NO;
+        return;
+    }
+
+    dispatch_async(
+        dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0),
+        ^{
+            @autoreleasepool {
+                const size_t width = texture.width;
+                const size_t height = texture.height;
+                const size_t bytesPerRow = width * 4;
+
+                CVPixelBufferRef pixelBuffer = NULL;
+
+                CVReturn result =
+                    CVPixelBufferCreate(kCFAllocatorDefault,
+                                        width,
+                                        height,
+                                        kCVPixelFormatType_32BGRA,
+                                        NULL,
+                                        &pixelBuffer);
+
+                if (result != kCVReturnSuccess || !pixelBuffer) {
+                    NSLog(@"[RAVEN] CVPixelBuffer allocation failed: %d",
+                          (int)result);
+                    self.isProcessing = NO;
+                    return;
+                }
+
+                CVPixelBufferLockBaseAddress(pixelBuffer, 0);
+
+                void *baseAddress =
+                    CVPixelBufferGetBaseAddress(pixelBuffer);
+
+                size_t pixelBufferRowBytes =
+                    CVPixelBufferGetBytesPerRow(pixelBuffer);
+
+                MTLRegion region =
+                    MTLRegionMake2D(0, 0, width, height);
+
+                [texture getBytes:baseAddress
+                      bytesPerRow:pixelBufferRowBytes
+                       fromRegion:region
+                      mipmapLevel:0];
+
+                CVPixelBufferUnlockBaseAddress(pixelBuffer, 0);
+
+                VNImageRequestHandler *handler =
+                    [[VNImageRequestHandler alloc]
+                        initWithCVPixelBuffer:pixelBuffer
+                        options:@{}];
+
+                NSError *error = nil;
+                [handler performRequests:@[self.vnRequest]
+                                   error:&error];
+
+                CVPixelBufferRelease(pixelBuffer);
+
+                if (error) {
+                    NSLog(@"[RAVEN] Metal inference error: %@", error);
+                    self.isProcessing = NO;
+                }
+            }
+        }
+    );
+}
+
+#pragma mark - UIKit Fallback Capture
 
 - (void)captureAndAnalyze {
     if (!self.coreMLEnabled) return;
     if (self.isProcessing) return;
+    if (![self isEngineCaptureAllowed]) return;
+
+    // If Metal frames are flowing, the present hook owns capture.
+    if (self.metalCaptureEnabled &&
+        (CACurrentMediaTime() - self.lastMetalCaptureTime) < 0.75) {
+        return;
+    }
 
     UIWindow *window = [self currentKeyWindow];
     if (!window) return;
 
     self.isProcessing = YES;
-
-    RavenGameEngine engine = RavenDetectGameEngine();
-    CAMetalLayer *metalLayer = RavenFindMetalLayer(window);
-
-    BOOL supportedEngine = NO;
-
-    if (engine == RavenGameEngineUnity && self.unityDetectionEnabled) {
-        supportedEngine = YES;
-    }
-    else if ((engine == RavenGameEngineUnreal4 ||
-              engine == RavenGameEngineUnreal5) &&
-             self.unrealDetectionEnabled) {
-        supportedEngine = YES;
-    }
-    else if (engine == RavenGameEngineUnknown) {
-        supportedEngine = YES;
-    }
-
-    if (!supportedEngine) {
-        self.isProcessing = NO;
-        return;
-    }
-
-    // Current fallback capture path. Metal layer detection is already present so
-    // this can later be replaced with drawable/texture capture without changing
-    // the CoreML or menu pipeline.
-    if (metalLayer) {
-        [self captureUIKitWindow:window];
-    }
-    else {
-        [self captureUIKitWindow:window];
-    }
+    [self captureUIKitWindow:window];
 }
 
 - (void)captureUIKitWindow:(UIWindow *)keyWindow {
     CGSize targetSize = CGSizeMake(640.0, 640.0);
 
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        @autoreleasepool {
-            __block UIImage *screenshot = nil;
+    dispatch_async(
+        dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0),
+        ^{
+            @autoreleasepool {
+                __block UIImage *screenshot = nil;
 
-            dispatch_sync(dispatch_get_main_queue(), ^{
-                UIGraphicsBeginImageContextWithOptions(targetSize, NO, 1.0);
+                dispatch_sync(dispatch_get_main_queue(), ^{
+                    UIGraphicsBeginImageContextWithOptions(targetSize,
+                                                           NO,
+                                                           1.0);
 
-                [keyWindow drawViewHierarchyInRect:CGRectMake(0,
-                                                               0,
-                                                               targetSize.width,
-                                                               targetSize.height)
-                                         afterScreenUpdates:NO];
+                    [keyWindow drawViewHierarchyInRect:
+                        CGRectMake(0,
+                                   0,
+                                   targetSize.width,
+                                   targetSize.height)
+                                     afterScreenUpdates:NO];
 
-                screenshot = UIGraphicsGetImageFromCurrentImageContext();
-                UIGraphicsEndImageContext();
-            });
+                    screenshot =
+                        UIGraphicsGetImageFromCurrentImageContext();
 
-            if (!screenshot || !screenshot.CGImage) {
-                self.isProcessing = NO;
-                return;
-            }
+                    UIGraphicsEndImageContext();
+                });
 
-            VNImageRequestHandler *handler =
-                [[VNImageRequestHandler alloc]
-                    initWithCGImage:screenshot.CGImage
-                    options:@{}];
+                if (!screenshot || !screenshot.CGImage) {
+                    self.isProcessing = NO;
+                    return;
+                }
 
-            NSError *err = nil;
-            [handler performRequests:@[self.vnRequest] error:&err];
+                VNImageRequestHandler *handler =
+                    [[VNImageRequestHandler alloc]
+                        initWithCGImage:screenshot.CGImage
+                        options:@{}];
 
-            if (err) {
-                NSLog(@"[RAVEN] Inference error: %@", err);
-                self.isProcessing = NO;
+                NSError *error = nil;
+                [handler performRequests:@[self.vnRequest]
+                                   error:&error];
+
+                if (error) {
+                    NSLog(@"[RAVEN] UIKit inference error: %@", error);
+                    self.isProcessing = NO;
+                }
             }
         }
-    });
+    );
 }
 
 #pragma mark - AScript Bridge
@@ -524,7 +882,10 @@ static NSURL *RavenSiblingURL(NSString *relativePath) {
     if (!self.aiAimEnabled) return;
     if (!self.ascriptEnabled) return;
 
-    CGSize size = UIScreen.mainScreen.bounds.size;
+    CGSize size = self.overlayView.bounds.size;
+    if (size.width <= 0.0 || size.height <= 0.0) {
+        size = UIScreen.mainScreen.bounds.size;
+    }
 
     CGPoint center = CGPointMake(size.width * 0.5,
                                  size.height * 0.5);
@@ -578,7 +939,10 @@ static NSURL *RavenSiblingURL(NSString *relativePath) {
     NSInteger confidenceColumns =
         MAX((NSInteger)1, confidence.count / MAX((NSInteger)1, detectionCount));
 
-    CGSize screenSize = UIScreen.mainScreen.bounds.size;
+    CGSize screenSize = self.overlayView.bounds.size;
+    if (screenSize.width <= 0.0 || screenSize.height <= 0.0) {
+        screenSize = UIScreen.mainScreen.bounds.size;
+    }
     CGRect screenBounds = CGRectMake(0, 0, screenSize.width, screenSize.height);
     CGPoint screenCenter = CGPointMake(screenSize.width * 0.5,
                                        screenSize.height * 0.5);
