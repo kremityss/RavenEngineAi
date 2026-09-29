@@ -356,17 +356,17 @@ static UIColor *RVSubText(void) {
             height - 58
         );
 
-    NSArray *headerViews =
+    NSArray<UIView *> *headerViews =
         self.header.subviews;
 
     if (headerViews.count >= 4) {
-        headerViews[0].frame =
+        ((UIView *)headerViews[0]).frame =
             CGRectMake(16, 17, 4, 24);
 
         self.titleLabel.frame =
             CGRectMake(30, 11, 100, 24);
 
-        headerViews[2].frame =
+        ((UIView *)headerViews[2]).frame =
             CGRectMake(31, 34, 100, 12);
 
         self.statusLabel.frame =
