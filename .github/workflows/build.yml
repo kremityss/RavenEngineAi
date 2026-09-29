@@ -5,18 +5,12 @@ on:
   push:
     branches:
       - main
-    paths-ignore:
-      - "**/*.md"
   pull_request:
     branches:
       - main
 
-permissions:
-  contents: read
-
 jobs:
   build:
-    name: Build iOS dylib
     runs-on: ubuntu-latest
 
     env:
@@ -31,55 +25,55 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
-            fakeroot \
-            rsync \
-            curl \
-            git \
-            unzip \
-            perl \
-            python3 \
             clang \
             lld \
-            libxml2-utils
+            make \
+            git \
+            perl \
+            python3 \
+            unzip \
+            zip \
+            libplist-utils \
+            fakeroot
 
       - name: Install Theos
         run: |
-          git clone --recursive --depth 1 https://github.com/theos/theos.git "$THEOS"
+          git clone --recursive https://github.com/theos/theos.git "$THEOS"
 
-      - name: Install iOS SDKs
+      - name: Install iOS SDK
         run: |
           git clone --depth 1 https://github.com/theos/sdks.git "$THEOS/sdks"
 
-      - name: Verify CoreML archive
+      - name: Prepare CoreML model
         run: |
           test -f RavenModelPackage_Upload.zip
-          unzip -l RavenModelPackage_Upload.zip
+          rm -rf Resources/RavenModelPackage Resources/RavenModel.mlpackage
+          unzip -oq RavenModelPackage_Upload.zip -d .
+          mv Resources/RavenModelPackage Resources/RavenModel.mlpackage
+          test -f Resources/RavenModel.mlpackage/Manifest.json
+          test -f Resources/RavenModel.mlpackage/Data/com.apple.CoreML/model.mlmodel
+          test -f Resources/RavenModel.mlpackage/Data/com.apple.CoreML/weights/weight.bin
 
-      - name: Build package
+      - name: Build
         run: |
           make clean
-          make package FINALPACKAGE=1 THEOS="$THEOS" -j$(nproc)
+          make package FINALPACKAGE=1
 
       - name: Show outputs
         if: always()
         run: |
-          echo "Packages:"
-          find packages -maxdepth 2 -type f 2>/dev/null || true
-          echo "Built dylibs:"
-          find .theos -type f \( -name "*.dylib" -o -name "*.deb" \) 2>/dev/null || true
+          echo "=== packages ==="
+          find packages -maxdepth 2 -type f -print 2>/dev/null || true
+          echo "=== dylibs ==="
+          find .theos -type f \( -name "*.dylib" -o -name "*.deb" \) -print 2>/dev/null || true
 
-      - name: Upload Debian package
+      - name: Upload package artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: RavenEngineAi-package
-          path: packages/*.deb
-          if-no-files-found: error
-
-      - name: Upload dylib
-        uses: actions/upload-artifact@v4
-        with:
-          name: RavenEngineAi-dylib
           path: |
+            packages/*.deb
             .theos/obj/**/*.dylib
-            .theos/obj/**/**/*.dylib
-          if-no-files-found: warn
+          if-no-files-found: error
+          retention-days: 14
