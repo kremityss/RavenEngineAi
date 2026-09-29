@@ -242,7 +242,7 @@ static NSURL *RavenSiblingURL(NSString *relativePath) {
         return;
     }
 
-    __weak typeof(self) weakSelf = self;
+    __weak ScreenAnalyzer *weakSelf = self;
 
     self.vnRequest = [[VNCoreMLRequest alloc]
         initWithModel:self.vnModel
@@ -334,7 +334,7 @@ static NSURL *RavenSiblingURL(NSString *relativePath) {
 #pragma mark - Menu Wiring
 
 - (void)wireMenuCallbacks {
-    __weak typeof(self) weakSelf = self;
+    __weak ScreenAnalyzer *weakSelf = self;
 
     [RavenMenu shared].toggleChanged = ^(NSString *feature, BOOL enabled) {
         ScreenAnalyzer *strongSelf = weakSelf;
