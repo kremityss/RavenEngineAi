@@ -19,5 +19,6 @@ RavenEngineAi_FRAMEWORKS = \
 	Metal
 
 RavenEngineAi_LDFLAGS = -ObjC
+RavenEngineAi_BUNDLE_RESOURCE_DIRS = Resources
 
 include $(THEOS_MAKE_PATH)/tweak.mk
