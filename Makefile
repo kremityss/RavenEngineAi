@@ -16,7 +16,9 @@ RavenEngineAi_FRAMEWORKS = \
 	CoreML \
 	Vision \
 	CoreImage \
-	Metal
+	Metal \
+	MetalPerformanceShaders \
+	CoreVideo
 
 RavenEngineAi_LDFLAGS = -ObjC
 RavenEngineAi_BUNDLE_RESOURCE_DIRS = Resources
