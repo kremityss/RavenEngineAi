@@ -16,6 +16,7 @@
 #import <unistd.h>
 #import <string.h>
 #import <stdio.h>
+#include <stdlib.h>
 
 #import "RavenMenu.h"
 
@@ -720,8 +721,6 @@ static NSInteger RavenInstallMetalPresentHooks(void) {
             @autoreleasepool {
                 const size_t width = texture.width;
                 const size_t height = texture.height;
-                const size_t bytesPerRow = width * 4;
-
                 CVPixelBufferRef pixelBuffer = NULL;
 
                 CVReturn result =
