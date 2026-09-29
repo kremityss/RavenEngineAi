@@ -38,11 +38,13 @@ jobs:
 
       - name: Install Theos
         run: |
-          git clone --recursive https://github.com/theos/theos.git "$THEOS"
-
-      - name: Install iOS SDK
-        run: |
-          git clone --depth 1 https://github.com/theos/sdks.git "$THEOS/sdks"
+          git clone --depth 1 --recursive https://github.com/theos/theos.git "$THEOS"
+          if [ -d "$THEOS/sdks/.git" ] || [ -f "$THEOS/sdks/.git" ]; then
+            git -C "$THEOS/sdks" fetch --depth 1 origin
+          else
+            rm -rf "$THEOS/sdks"
+            git clone --depth 1 https://github.com/theos/sdks.git "$THEOS/sdks"
+          fi
 
       - name: Prepare CoreML model
         run: |
