@@ -5,7 +5,7 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = RavenEngineAi
 
-RavenEngineAi_FILES = Tweak.mm RavenMenu.mm
+RavenEngineAi_FILES = Tweak.mm RavenMenu.mm EmbeddedModel.S
 RavenEngineAi_CFLAGS = -fobjc-arc
 RavenEngineAi_CCFLAGS = -std=c++17
 
