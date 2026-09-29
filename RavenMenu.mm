@@ -1015,13 +1015,41 @@ static UIColor *RVSubText(void) {
 
 #pragma mark - Visibility
 
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    if (self.hidden || self.alpha <= 0.01 || !self.userInteractionEnabled) {
+        return nil;
+    }
+
+    CGPoint orbPoint = [self.orbButton convertPoint:point fromView:self];
+    UIView *orbHit = [self.orbButton hitTest:orbPoint withEvent:event];
+    if (orbHit) return orbHit;
+
+    if (!self.menu.hidden && self.menu.alpha > 0.01) {
+        CGPoint menuPoint = [self.menu convertPoint:point fromView:self];
+        UIView *menuHit = [self.menu hitTest:menuPoint withEvent:event];
+        if (menuHit) return menuHit;
+    }
+
+    return nil;
+}
+
 - (void)attachToWindow:(UIWindow *)window {
+    if (!window) return;
+
     self.frame = window.bounds;
     self.autoresizingMask =
         UIViewAutoresizingFlexibleWidth |
         UIViewAutoresizingFlexibleHeight;
+    self.layer.zPosition = 1000000.0;
 
-    [window addSubview:self];
+    if (self.superview != window) {
+        [self removeFromSuperview];
+        [window addSubview:self];
+    }
+
+    [window bringSubviewToFront:self];
+    [self setNeedsLayout];
+    [self layoutIfNeeded];
 }
 
 - (void)toggleMenu {
