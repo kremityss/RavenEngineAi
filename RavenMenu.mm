@@ -5,10 +5,6 @@ static UIColor *RVBackground(void) {
     return [UIColor colorWithRed:0.035 green:0.037 blue:0.045 alpha:0.97];
 }
 
-static UIColor *RVPanel(void) {
-    return [UIColor colorWithRed:0.065 green:0.068 blue:0.082 alpha:1.0];
-}
-
 static UIColor *RVPanel2(void) {
     return [UIColor colorWithRed:0.085 green:0.09 blue:0.105 alpha:1.0];
 }
