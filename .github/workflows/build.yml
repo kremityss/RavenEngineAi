@@ -65,26 +65,27 @@ jobs:
           test -f Resources/RavenModel.mlpackage/Data/com.apple.CoreML/model.mlmodel
           test -f Resources/RavenModel.mlpackage/Data/com.apple.CoreML/weights/weight.bin
 
-      - name: Build
+      - name: Build dylib
         run: |
           make clean
-          make package FINALPACKAGE=1
+          make FINALPACKAGE=1
 
-      - name: Show outputs
-        if: always()
+      - name: Prepare non-JB artifact
         run: |
-          echo "=== packages ==="
-          find packages -maxdepth 2 -type f -print 2>/dev/null || true
-          echo "=== dylibs ==="
-          find .theos -type f \( -name "*.dylib" -o -name "*.deb" \) -print 2>/dev/null || true
+          rm -rf dist
+          mkdir -p dist/Resources
+          test -f .theos/obj/RavenEngineAi.dylib
+          cp .theos/obj/RavenEngineAi.dylib dist/RavenEngineAi.dylib
+          cp -R Resources/RavenModel.mlpackage dist/Resources/RavenModel.mlpackage
+          cp control dist/control
+          printf '%s\n'             'RavenEngineAi non-JB build'             'Inject RavenEngineAi.dylib into the target IPA.'             'Keep Resources/RavenModel.mlpackage with the app resources so the runtime can find the model.'             > dist/README.txt
+          echo "=== artifact contents ==="
+          find dist -type f -print
 
-      - name: Upload package artifact
-        if: success()
+      - name: Upload RavenEngineAi artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RavenEngineAi-package
-          path: |
-            packages/*.deb
-            .theos/obj/**/*.dylib
+          name: RavenEngineAi-nonJB
+          path: dist/
           if-no-files-found: error
           retention-days: 14
