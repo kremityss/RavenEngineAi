@@ -1,0 +1,85 @@
+name: Build RavenEngineAi
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "**/*.md"
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build iOS dylib
+    runs-on: ubuntu-latest
+
+    env:
+      THEOS: ${{ github.workspace }}/theos
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            fakeroot \
+            rsync \
+            curl \
+            git \
+            unzip \
+            perl \
+            python3 \
+            clang \
+            lld \
+            libxml2-utils
+
+      - name: Install Theos
+        run: |
+          git clone --recursive --depth 1 https://github.com/theos/theos.git "$THEOS"
+
+      - name: Install iOS SDKs
+        run: |
+          git clone --depth 1 https://github.com/theos/sdks.git "$THEOS/sdks"
+
+      - name: Verify CoreML archive
+        run: |
+          test -f RavenModelPackage_Upload.zip
+          unzip -l RavenModelPackage_Upload.zip
+
+      - name: Build package
+        run: |
+          make clean
+          make package FINALPACKAGE=1 THEOS="$THEOS" -j$(nproc)
+
+      - name: Show outputs
+        if: always()
+        run: |
+          echo "Packages:"
+          find packages -maxdepth 2 -type f 2>/dev/null || true
+          echo "Built dylibs:"
+          find .theos -type f \( -name "*.dylib" -o -name "*.deb" \) 2>/dev/null || true
+
+      - name: Upload Debian package
+        uses: actions/upload-artifact@v4
+        with:
+          name: RavenEngineAi-package
+          path: packages/*.deb
+          if-no-files-found: error
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: RavenEngineAi-dylib
+          path: |
+            .theos/obj/**/*.dylib
+            .theos/obj/**/**/*.dylib
+          if-no-files-found: warn
