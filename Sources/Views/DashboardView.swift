@@ -22,7 +22,23 @@ struct DashboardView: View {
                             MetricCard(title: "INFERENCE", value: String(format: "%.1f ms", vision.inferenceMs), icon: "bolt.fill")
                             MetricCard(title: "ESP32", value: ble.state.rawValue, icon: "cpu")
                         }
-                        captureCard
+
+                        Button {
+                            appState.selectedTab = .capture
+                        } label: {
+                            HStack {
+                                Image(systemName: "record.circle")
+                                Text("OPEN CAPTURE")
+                                    .fontWeight(.bold)
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                            }
+                            .padding(16)
+                            .foregroundStyle(.white)
+                            .background(RavenTheme.panel)
+                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
                     }
                     .padding()
                 }
@@ -37,7 +53,7 @@ struct DashboardView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("RAVEN ENGINE AI")
                     .font(.system(size: 22, weight: .black, design: .rounded))
-                Text("NATIVE iOS CONTROL CORE")
+                Text("NATIVE iOS CONTROL CORE • BUILD 0.1.1")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(RavenTheme.textSecondary)
             }
@@ -65,25 +81,6 @@ struct DashboardView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(RavenTheme.accent)
-            }
-        }
-    }
-
-    private var captureCard: some View {
-        RavenCard {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("SCREEN CAPTURE")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(RavenTheme.textSecondary)
-                Text("ReplayKit broadcast extension is embedded in the IPA.")
-                    .font(.subheadline)
-                HStack(spacing: 12) {
-                    BroadcastPickerView()
-                        .frame(width: 48, height: 48)
-                    Text("Tap the broadcast control and select Raven Capture.")
-                        .font(.caption)
-                        .foregroundStyle(RavenTheme.textSecondary)
-                }
             }
         }
     }

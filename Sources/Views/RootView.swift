@@ -9,6 +9,10 @@ struct RootView: View {
                 .tabItem { Label("Home", systemImage: "gauge.with.dots.needle.67percent") }
                 .tag(AppState.Tab.dashboard)
 
+            CaptureView()
+                .tabItem { Label("Capture", systemImage: "record.circle") }
+                .tag(AppState.Tab.capture)
+
             VisionView()
                 .tabItem { Label("Vision", systemImage: "viewfinder") }
                 .tag(AppState.Tab.vision)

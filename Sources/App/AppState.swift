@@ -2,7 +2,14 @@ import SwiftUI
 
 @MainActor
 final class AppState: ObservableObject {
-    enum Tab: Hashable { case dashboard, vision, esp32, device, settings }
+    enum Tab: Hashable {
+        case dashboard
+        case capture
+        case vision
+        case esp32
+        case device
+        case settings
+    }
 
     @Published var selectedTab: Tab = .dashboard
     @Published var performanceMode = true
