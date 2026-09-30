@@ -1,0 +1,67 @@
+name: RavenEngineAI
+
+options:
+  minimumXcodeGenVersion: 2.40.0
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+
+targets:
+  RavenBroadcast:
+    type: app-extension
+    platform: iOS
+    sources:
+      - BroadcastExtension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kremcheats.RavenEngineAI.broadcast
+        INFOPLIST_FILE: Config/BroadcastInfo.plist
+        GENERATE_INFOPLIST_FILE: NO
+        SKIP_INSTALL: YES
+        APPLICATION_EXTENSION_API_ONLY: YES
+    dependencies:
+      - sdk: ReplayKit.framework
+      - sdk: CoreMedia.framework
+      - sdk: CoreVideo.framework
+      - sdk: Vision.framework
+      - sdk: CoreML.framework
+
+  RavenEngineAI:
+    type: application
+    platform: iOS
+    sources:
+      - Sources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kremcheats.RavenEngineAI
+        PRODUCT_NAME: RavenEngineAI
+        INFOPLIST_FILE: Config/AppInfo.plist
+        GENERATE_INFOPLIST_FILE: NO
+        TARGETED_DEVICE_FAMILY: "1,2"
+    dependencies:
+      - target: RavenBroadcast
+        embed: true
+      - sdk: SwiftUI.framework
+      - sdk: ReplayKit.framework
+      - sdk: CoreBluetooth.framework
+      - sdk: Network.framework
+      - sdk: Vision.framework
+      - sdk: CoreML.framework
+
+schemes:
+  RavenEngineAI:
+    build:
+      targets:
+        RavenEngineAI: all
+        RavenBroadcast: all
+    run:
+      config: Debug
+    archive:
+      config: Release

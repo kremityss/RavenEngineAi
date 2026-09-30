@@ -1,0 +1,66 @@
+name: Build RavenEngineAI IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "Sources/**"
+      - "BroadcastExtension/**"
+      - "Config/**"
+      - "project.yml"
+      - ".github/workflows/build-ios.yml"
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          set -euxo pipefail
+          xcodebuild -version
+          brew install xcodegen
+
+      - name: Generate project
+        run: |
+          set -euxo pipefail
+          xcodegen generate
+          xcodebuild -project RavenEngineAI.xcodeproj -list
+
+      - name: Build unsigned device app
+        run: |
+          set -euxo pipefail
+          mkdir -p build dist
+          xcodebuild -project RavenEngineAI.xcodeproj -scheme RavenEngineAI -configuration Release -sdk iphoneos -derivedDataPath build/DerivedData CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build | tee build/xcodebuild.log
+
+      - name: Package IPA
+        run: |
+          set -euxo pipefail
+          APP_PATH="$(find build/DerivedData/Build/Products/Release-iphoneos -maxdepth 1 -name 'RavenEngineAI.app' -print -quit)"
+          test -n "$APP_PATH"
+          rm -rf dist/Payload
+          mkdir -p dist/Payload
+          cp -R "$APP_PATH" dist/Payload/
+          cd dist
+          /usr/bin/zip -qry RavenEngineAI-unsigned.ipa Payload
+          /usr/bin/unzip -l RavenEngineAI-unsigned.ipa | head -80
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: RavenEngineAI-unsigned-ipa
+          path: |
+            dist/RavenEngineAI-unsigned.ipa
+            build/xcodebuild.log
+          if-no-files-found: error
+          retention-days: 14
