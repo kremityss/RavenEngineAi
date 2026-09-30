@@ -8,6 +8,12 @@ struct VisionView: View {
             ZStack {
                 RavenTheme.backgroundGradient.ignoresSafeArea()
                 Form {
+                    Section("FOV") {
+                        FOVPreview(radius: vision.fovRadius)
+                            .listRowInsets(EdgeInsets())
+                            .listRowBackground(Color.clear)
+                    }
+
                     Section("Engine") {
                         Toggle("Vision Engine", isOn: Binding(
                             get: { vision.enabled },

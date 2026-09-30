@@ -8,13 +8,15 @@ final class SampleHandler: RPBroadcastSampleHandler {
         subsystem: "com.kremcheats.RavenEngineAI.broadcast",
         category: "Capture"
     )
-    private var frameCount: UInt64 = 0
-    private var firstPTS: CMTime?
+    private let inference = RavenInferenceEngine()
+
+    private var captureFrames: UInt64 = 0
+    private var lastLogFrame: UInt64 = 0
 
     override func broadcastStarted(withSetupInfo setupInfo: [String : NSObject]?) {
-        frameCount = 0
-        firstPTS = nil
-        logger.info("Raven capture started")
+        captureFrames = 0
+        lastLogFrame = 0
+        logger.info("Raven capture started; modelLoaded=\(self.inference.isModelLoaded)")
     }
 
     override func broadcastPaused() {
@@ -26,7 +28,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
     }
 
     override func broadcastFinished() {
-        logger.info("Raven capture finished after \(self.frameCount) video frames")
+        logger.info("Raven capture finished after \(self.captureFrames) video frames")
     }
 
     override func processSampleBuffer(
@@ -34,13 +36,17 @@ final class SampleHandler: RPBroadcastSampleHandler {
         with sampleBufferType: RPSampleBufferType
     ) {
         guard sampleBufferType == .video else { return }
-        guard CMSampleBufferGetImageBuffer(sampleBuffer) != nil else { return }
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
-        let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-        if firstPTS == nil { firstPTS = pts }
-        frameCount &+= 1
+        captureFrames &+= 1
 
-        // Core ML / Vision processing attaches here next.
-        // Keep this callback non-blocking with a bounded worker pipeline.
+        inference.submit(pixelBuffer: pixelBuffer) { [weak self] stats in
+            guard let self else { return }
+            guard stats.completedFrames >= self.lastLogFrame + 60 else { return }
+            self.lastLogFrame = stats.completedFrames
+            self.logger.info(
+                "AI fps=\(stats.modelFPS, format: .fixed(precision: 1)) latency=\(stats.inferenceMs, format: .fixed(precision: 1))ms detections=\(stats.detections) drops=\(stats.droppedFrames)"
+            )
+        }
     }
 }
