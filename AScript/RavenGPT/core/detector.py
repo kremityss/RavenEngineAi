@@ -8,7 +8,7 @@ import urllib.request
 
 MODEL_SHA256 = "5446731e6afb9605ef1c60fac66338c2006595a14f97a41e061b0215965a7132"
 MODEL_PARTS = 11
-MODEL_PART_URL = "https://raw.githubusercontent.com/kremityss/RavenEngineAi/main/.ravenbin_parts/part{index:02d}"\nMODEL_PARAM_URL = "https://raw.githubusercontent.com/kremityss/RavenEngineAi/main/AScript/RavenGPT/res/raven.param"\nMODEL_PARAM_SIZE = 22719
+MODEL_PART_URL = "https://raw.githubusercontent.com/kremityss/RavenEngineAi/main/.ravenbin_parts/part{index:02d}"\nMODEL_PARAM_URL = "https://raw.githubusercontent.com/kremityss/RavenEngineAi/main/AScript/RavenGPT/res/raven.param"\nMODEL_PARAM_SIZE = 22636
 MODEL_PARAM_SHA256 = "346093c80049ed50532dbba802937186baca435ce76ae6c3fb5ded63799b1d5c"
 
 
