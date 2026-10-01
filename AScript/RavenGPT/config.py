@@ -22,7 +22,7 @@ CONFIG = {
     "look_anchor_y": 0.50,
     "self_filter": True,
     "self_exclusion": [0.36, 0.58, 0.64, 1.00],
-    "target_tags": [],
+    "target_tags": ["enemy"],
     "model_param": "raven.param",
     "model_bin": "raven.bin",
     "model_yaml": "data.yaml",
