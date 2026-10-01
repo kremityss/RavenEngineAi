@@ -1,5 +1,6 @@
 import hashlib
 import os
+import ssl
 import tempfile
 import time
 import urllib.request
@@ -8,6 +9,7 @@ import urllib.request
 MODEL_SHA256 = "5446731e6afb9605ef1c60fac66338c2006595a14f97a41e061b0215965a7132"
 MODEL_PARTS = 11
 MODEL_PART_URL = "https://raw.githubusercontent.com/kremityss/RavenEngineAi/main/.ravenbin_parts/part{index:02d}"\nMODEL_PARAM_URL = "https://raw.githubusercontent.com/kremityss/RavenEngineAi/main/AScript/RavenGPT/res/raven.param"\nMODEL_PARAM_SIZE = 22719
+MODEL_PARAM_SHA256 = "346093c80049ed50532dbba802937186baca435ce76ae6c3fb5ded63799b1d5c"
 
 
 class RavenDetector:
@@ -42,7 +44,7 @@ class RavenDetector:
             with open(tmp, "wb") as out:
                 for i in range(MODEL_PARTS):
                     url = MODEL_PART_URL.format(index=i)
-                    with urllib.request.urlopen(url, timeout=20) as response:
+                    with self._urlopen(url, timeout=20) as response:
                         while True:
                             chunk = response.read(1024 * 256)
                             if not chunk:
@@ -68,10 +70,10 @@ class RavenDetector:
             return target
         tmp = target + ".part"
         try:
-            with urllib.request.urlopen(MODEL_PARAM_URL, timeout=20) as response:
+            with self._urlopen(MODEL_PARAM_URL, timeout=20) as response:
                 data = response.read()
-            if len(data) != MODEL_PARAM_SIZE or not data.startswith(b"7767517"):
-                raise RuntimeError("Raven param validation failed")
+            if len(data) != MODEL_PARAM_SIZE or hashlib.sha256(data).hexdigest() != MODEL_PARAM_SHA256:
+                raise RuntimeError("Raven param checksum mismatch")
             with open(tmp, "wb") as out:
                 out.write(data)
             os.replace(tmp, target)
