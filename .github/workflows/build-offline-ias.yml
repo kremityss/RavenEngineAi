@@ -1,0 +1,63 @@
+name: Build RavenGPT Offline IAS
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/build-offline-ias.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reconstruct verified NCNN model
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p AScript/RavenGPT/res
+          cat .ravenbin_parts/part00 .ravenbin_parts/part01 .ravenbin_parts/part02 .ravenbin_parts/part03 .ravenbin_parts/part04 .ravenbin_parts/part05 .ravenbin_parts/part06 .ravenbin_parts/part07 .ravenbin_parts/part08 .ravenbin_parts/part09 .ravenbin_parts/part10 > AScript/RavenGPT/res/raven.bin
+
+          test "$(wc -c < AScript/RavenGPT/res/raven.bin)" = "5223400"
+          test "$(sha256sum AScript/RavenGPT/res/raven.bin | awk '{print $1}')" = "5446731e6afb9605ef1c60fac66338c2006595a14f97a41e061b0215965a7132"
+          test "$(wc -c < AScript/RavenGPT/res/raven.param)" = "22636"
+          test "$(sha256sum AScript/RavenGPT/res/raven.param | awk '{print $1}')" = "346093c80049ed50532dbba802937186baca435ce76ae6c3fb5ded63799b1d5c"
+
+      - name: Build offline IAS
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf dist
+          mkdir -p dist
+          python3 - <<'PY'
+          from pathlib import Path
+          import zipfile
+          root = Path("AScript/RavenGPT")
+          out = Path("dist/RavenGPT_OFFLINE_FULL.ias")
+          with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+              for p in sorted(root.rglob("*")):
+                  if p.is_file() and "__pycache__" not in p.parts and p.suffix != ".pyc":
+                      z.write(p, p.relative_to(root).as_posix())
+          print(out, out.stat().st_size)
+          PY
+          cp dist/RavenGPT_OFFLINE_FULL.ias dist/RavenGPT_OFFLINE_FULL.zip
+
+      - name: Publish offline package
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f dist/RavenGPT_OFFLINE_FULL.ias dist/RavenGPT_OFFLINE_FULL.zip
+          if git diff --cached --quiet; then
+            echo "No package changes"
+          else
+            git commit -m "build: publish offline RavenGPT package [skip ci]"
+            git push
+          fi
