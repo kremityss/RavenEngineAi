@@ -1,4 +1,13 @@
+import hashlib
+import os
+import tempfile
 import time
+import urllib.request
+
+
+MODEL_SHA256 = "5446731e6afb9605ef1c60fac66338c2006595a14f97a41e061b0215965a7132"
+MODEL_PARTS = 11
+MODEL_PART_URL = "https://raw.githubusercontent.com/kremityss/RavenEngineAi/main/.ravenbin_parts/part{index:02d}"
 
 
 class RavenDetector:
@@ -9,14 +18,68 @@ class RavenDetector:
         self.last_ms = 0.0
         self.last_error = None
 
+    def _sha256(self, path):
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    def _bootstrap_bin(self):
+        cache_dir = os.path.join(tempfile.gettempdir(), "ravengpt")
+        os.makedirs(cache_dir, exist_ok=True)
+        target = os.path.join(cache_dir, "raven.bin")
+
+        if os.path.isfile(target):
+            try:
+                if self._sha256(target) == MODEL_SHA256:
+                    return target
+            except Exception:
+                pass
+
+        tmp = target + ".part"
+        try:
+            with open(tmp, "wb") as out:
+                for i in range(MODEL_PARTS):
+                    url = MODEL_PART_URL.format(index=i)
+                    with urllib.request.urlopen(url, timeout=20) as response:
+                        while True:
+                            chunk = response.read(1024 * 256)
+                            if not chunk:
+                                break
+                            out.write(chunk)
+            if self._sha256(tmp) != MODEL_SHA256:
+                raise RuntimeError("Raven model checksum mismatch after download")
+            os.replace(tmp, target)
+            return target
+        except Exception:
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except Exception:
+                pass
+            raise
+
+    def _resolve_model_bin(self, R):
+        try:
+            packaged = R.res(self.cfg["model_bin"])
+            if packaged and os.path.isfile(packaged) and os.path.getsize(packaged) > 1024:
+                if self._sha256(packaged) == MODEL_SHA256:
+                    return packaged
+        except Exception:
+            pass
+        return self._bootstrap_bin()
+
     def load(self):
         try:
             from ascript.ios.system import R
             from ascript.ios.screen import yolov11
+
             self.yolo = yolov11
+            bin_path = self._resolve_model_bin(R)
             self.loaded = bool(yolov11.load(
                 R.res(self.cfg["model_param"]),
-                R.res(self.cfg["model_bin"]),
+                bin_path,
                 yaml_path=R.res(self.cfg["model_yaml"]),
                 use_gpu=True,
             ))
@@ -47,6 +110,7 @@ class RavenDetector:
         """Run inference only inside roi=[x1,y1,x2,y2], then restore screen coordinates."""
         if not self.loaded:
             return []
+
         h, w = frame.shape[:2]
         x1, y1, x2, y2 = [int(v) for v in roi]
         x1 = max(0, min(w - 2, x1))
