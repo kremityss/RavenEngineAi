@@ -7,7 +7,7 @@ import urllib.request
 
 MODEL_SHA256 = "5446731e6afb9605ef1c60fac66338c2006595a14f97a41e061b0215965a7132"
 MODEL_PARTS = 11
-MODEL_PART_URL = "https://raw.githubusercontent.com/kremityss/RavenEngineAi/main/.ravenbin_parts/part{index:02d}"
+MODEL_PART_URL = "https://raw.githubusercontent.com/kremityss/RavenEngineAi/main/.ravenbin_parts/part{index:02d}"\nMODEL_PARAM_URL = "https://raw.githubusercontent.com/kremityss/RavenEngineAi/main/AScript/RavenGPT/res/raven.param"\nMODEL_PARAM_SIZE = 22719
 
 
 class RavenDetector:
@@ -59,6 +59,39 @@ class RavenDetector:
             except Exception:
                 pass
             raise
+
+    def _bootstrap_param(self):
+        cache_dir = os.path.join(tempfile.gettempdir(), "ravengpt")
+        os.makedirs(cache_dir, exist_ok=True)
+        target = os.path.join(cache_dir, "raven.param")
+        if os.path.isfile(target) and os.path.getsize(target) == MODEL_PARAM_SIZE:
+            return target
+        tmp = target + ".part"
+        try:
+            with urllib.request.urlopen(MODEL_PARAM_URL, timeout=20) as response:
+                data = response.read()
+            if len(data) != MODEL_PARAM_SIZE or not data.startswith(b"7767517"):
+                raise RuntimeError("Raven param validation failed")
+            with open(tmp, "wb") as out:
+                out.write(data)
+            os.replace(tmp, target)
+            return target
+        except Exception:
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except Exception:
+                pass
+            raise
+
+    def _resolve_model_param(self, R):
+        try:
+            packaged = R.res(self.cfg["model_param"])
+            if packaged and os.path.isfile(packaged) and os.path.getsize(packaged) > 1024:
+                return packaged
+        except Exception:
+            pass
+        return self._bootstrap_param()
 
     def _resolve_model_bin(self, R):
         try:
