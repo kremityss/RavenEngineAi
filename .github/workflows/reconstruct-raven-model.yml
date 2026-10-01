@@ -1,0 +1,28 @@
+name: Reconstruct Raven model
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.ravenbin_parts/**'
+
+permissions:
+  contents: write
+
+jobs:
+  reconstruct:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct raven.bin
+        run: |
+          mkdir -p AScript/RavenGPT/res
+          cat .ravenbin_parts/part* > AScript/RavenGPT/res/raven.bin
+          echo "5446731e6afb9605ef1c60fac66338c2006595a14f97a41e061b0215965a7132  AScript/RavenGPT/res/raven.bin" | sha256sum -c -
+      - name: Commit final model
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add AScript/RavenGPT/res/raven.bin AScript/RavenGPT/res/raven.param AScript/RavenGPT/res/data.yaml
+          git rm -r .ravenbin_parts
+          git commit -m "feat: add exported RavenGPT NCNN model"
+          git push
