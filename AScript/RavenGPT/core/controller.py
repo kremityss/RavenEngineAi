@@ -48,6 +48,17 @@ class AimController:
     def reconnect_async(self):
         threading.Thread(target=self.connect, daemon=True).start()
 
+    def update_screen_size(self, width, height):
+        width, height = int(width), int(height)
+        if width <= 0 or height <= 0:
+            return
+        changed = (width != self.w or height != self.h)
+        self.w, self.h = width, height
+        # BleDevice is constructed with screen dimensions. Recreate it when
+        # orientation changes so ABS coordinates match the live game frame.
+        if changed and not self.cfg.get("mock_hid", True):
+            self.reconnect_async()
+
     def disconnect(self):
         old = self.device
         self.device = None
