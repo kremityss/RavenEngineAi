@@ -1,0 +1,25 @@
+name: Export Raven YOLO11 to AScript NCNN
+on:
+  workflow_dispatch:
+    inputs:
+      model_path:
+        description: Path to .pt weights already committed to the repo
+        required: true
+        default: model_src/best.pt
+      imgsz:
+        description: NCNN input size
+        required: true
+        default: '416'
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - run: pip install -U ultralytics pyyaml ncnn pnnx
+      - run: python tools/export_ncnn.py "${{ inputs.model_path }}" --imgsz "${{ inputs.imgsz }}" --out build/raven-ncnn --quantize 16
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RavenGPT-AScript-NCNN
+          path: build/raven-ncnn/

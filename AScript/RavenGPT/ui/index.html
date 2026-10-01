@@ -1,0 +1,28 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>RavenGPT</title><style>
+:root{--bg:#09090b;--panel:#121217;--line:#282830;--text:#f4f4f5;--muted:#a1a1aa;--accent:#ff2d2d}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top,#201014 0,#09090b 48%);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}.wrap{padding:16px;max-width:720px;margin:auto}.hero{padding:18px;border:1px solid #342126;border-radius:20px;background:rgba(18,18,23,.94);box-shadow:0 20px 60px rgba(0,0,0,.35)}h1{margin:0;font-size:27px;letter-spacing:.8px}.sub{color:var(--muted);font-size:12px;margin-top:5px;line-height:1.45}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:14px}.card{padding:13px;border:1px solid var(--line);border-radius:16px;background:var(--panel)}.label{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.8px}.value{font-size:20px;font-weight:700;margin-top:4px}.section{margin-top:14px;padding:14px;border:1px solid var(--line);border-radius:18px;background:rgba(18,18,23,.92)}.row{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:12px 0}.row label{font-size:14px}.row input[type=range]{width:52%}.toggle{appearance:none;width:50px;height:28px;border-radius:999px;background:#2b2b31;position:relative}.toggle:after{content:"";position:absolute;width:22px;height:22px;border-radius:50%;top:3px;left:3px;background:white;transition:.18s}.toggle:checked{background:var(--accent)}.toggle:checked:after{left:25px}select{background:#1b1b20;color:white;border:1px solid #33343c;border-radius:10px;padding:8px 10px}.pill{display:inline-flex;padding:6px 9px;border-radius:999px;background:#1f2026;color:#d4d4d8;font-size:11px}.ok{color:#4ade80}.bad{color:#fb7185}.warn{color:#fbbf24}</style></head><body><div class="wrap">
+<div class="hero"><h1>RAVENGPT</h1><div class="sub">AScript Vision • YOLO11n NCNN • ESP32-S3 ABS HID</div><div class="grid"><div class="card"><div class="label">Pipeline FPS</div><div id="fps" class="value">0.0</div></div><div class="card"><div class="label">Inference</div><div id="ms" class="value">0 ms</div></div><div class="card"><div class="label">Detections</div><div id="det" class="value">0</div></div><div class="card"><div class="label">Target</div><div id="target" class="value">—</div></div></div></div>
+<div class="section"><div class="row"><label>Aim Assist</label><input id="aim_enabled" class="toggle" type="checkbox"></div><div class="row"><label>Hardware simulation</label><input id="mock_hid" class="toggle" type="checkbox" checked></div><div class="row"><label>Aim bone</label><select id="aim_part"><option value="head">Head</option><option value="chest">Chest</option></select></div><div class="row"><label>Confidence <span id="confidence_v"></span></label><input id="confidence" type="range" min="0.1" max="0.9" step="0.01" value="0.45"></div><div class="row"><label>FOV <span id="fov_radius_ratio_v"></span></label><input id="fov_radius_ratio" type="range" min="0.08" max="0.48" step="0.01" value="0.28"></div><div class="row"><label>Strength <span id="strength_v"></span></label><input id="strength" type="range" min="0.1" max="1.0" step="0.01" value="0.72"></div><div class="row"><label>Smoothing <span id="smoothing_v"></span></label><input id="smoothing" type="range" min="0" max="0.95" step="0.01" value="0.58"></div></div>
+<div class="section"><div class="row"><span class="pill">Model</span><span id="model" class="warn">waiting</span></div><div class="row"><span class="pill">ESP32</span><span id="hid" class="bad">offline</span></div><div class="row"><span class="pill">Capture</span><span id="cap">0 ms</span></div><div class="row"><span class="pill">Confidence</span><span id="conf">0</span></div><div id="err" class="sub"></div></div></div>
+<script>
+const ids=['aim_enabled','mock_hid','aim_part','confidence','fov_radius_ratio','strength','smoothing'];
+const $=id=>document.getElementById(id);
+function send(id){const el=$(id);let v=el.type==='checkbox'?el.checked:(el.type==='range'?Number(el.value):el.value);ascript.call('config',JSON.stringify({[id]:v}));show(id,v)}
+function show(id,v){const o=$(id+'_v');if(o&&!Number.isNaN(Number(v)))o.textContent=Number(v).toFixed(2)}
+ids.forEach(id=>{const e=$(id);e.addEventListener('change',()=>send(id));e.addEventListener('input',()=>{if(e.type==='range')show(id,e.value)})});
+function ravenUpdate(p){
+ if(p.type==='config'){Object.entries(p.config||{}).forEach(([k,v])=>{const e=$(k);if(!e)return;if(e.type==='checkbox')e.checked=!!v;else e.value=v;show(k,v)})}
+ if(p.type==='metrics'){
+  $('fps').textContent=Number(p.loop_fps||0).toFixed(1);
+  $('ms').textContent=Number(p.detect_ms||0).toFixed(0)+' ms';
+  $('det').textContent=p.detections||0;
+  $('target').textContent=p.target||'—';
+  $('cap').textContent=Number(p.capture_ms||0).toFixed(1)+' ms';
+  $('conf').textContent=p.confidence||0;
+  $('model').textContent=p.model_loaded?'ready':'missing';
+  $('model').className=p.model_loaded?'ok':'warn';
+  $('hid').textContent=p.mock_hid?'SIM':(p.hid?'online':'offline');
+  $('hid').className=(p.hid||p.mock_hid)?'ok':'bad';
+  $('err').textContent=p.error||'';
+ }
+}
+</script></body></html>
