@@ -81,7 +81,8 @@ class RavenDetector:
                 R.res(self.cfg["model_param"]),
                 bin_path,
                 yaml_path=R.res(self.cfg["model_yaml"]),
-                use_gpu=True,
+                nc=1,
+                use_gpu=False,
             ))
             if not self.loaded:
                 self.last_error = "YOLO11 NCNN load returned false"
