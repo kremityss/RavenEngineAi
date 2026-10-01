@@ -1,13 +1,23 @@
 import time
 
-from config import CONFIG
-from core.metrics import RateMeter, EWMA
-from core.detector import RavenDetector
-from core.selector import select_target, aim_point
-from core.tracker import LKBoxTracker
-from core.controller import AimController
-from core.dashboard import Dashboard
-from core.preflight import run_preflight
+try:
+    from .config import CONFIG
+    from .core.metrics import RateMeter, EWMA
+    from .core.detector import RavenDetector
+    from .core.selector import select_target, aim_point
+    from .core.tracker import LKBoxTracker
+    from .core.controller import AimController
+    from .core.dashboard import Dashboard
+    from .core.preflight import run_preflight
+except ImportError:
+    from config import CONFIG
+    from core.metrics import RateMeter, EWMA
+    from core.detector import RavenDetector
+    from core.selector import select_target, aim_point
+    from core.tracker import LKBoxTracker
+    from core.controller import AimController
+    from core.dashboard import Dashboard
+    from core.preflight import run_preflight
 
 from ascript.ios import screen
 
