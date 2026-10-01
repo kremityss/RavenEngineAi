@@ -78,6 +78,16 @@ def main():
                 time.sleep(0.01)
                 continue
 
+            # screen.size() can remain portrait while the captured game frame
+            # rotates to landscape. Always trust the actual CV frame dimensions.
+            frame_h, frame_w = frame.shape[:2]
+            if frame_w != width or frame_h != height:
+                print("[RavenGPT] frame orientation/size:", [frame_w, frame_h])
+                width, height = frame_w, frame_h
+                controller.update_screen_size(width, height)
+                tracker.reset()
+                last_target = None
+
             now = time.perf_counter()
 
             # If the user imports weights while the script is open, retry periodically.
