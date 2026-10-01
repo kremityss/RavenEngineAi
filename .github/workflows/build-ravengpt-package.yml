@@ -1,0 +1,79 @@
+name: Build RavenGPT AScript Package
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-ravengpt-package.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install exporter
+        run: |
+          python -m pip install --upgrade pip
+          pip install ultralytics==8.4.55 pyyaml ncnn pnnx
+
+      - name: Download custom weights
+        run: |
+          mkdir -p model_src
+          curl -L --fail -o model_src/weights-4.pt "https://raw.githubusercontent.com/kremityss/Weights/main/weights%204.pt"
+
+      - name: Export custom model to NCNN
+        run: |
+          python tools/export_ncnn.py model_src/weights-4.pt --imgsz 416 --out AScript/RavenGPT/res --precision 16
+
+      - name: Verify package
+        run: |
+          python -m compileall -q AScript/RavenGPT
+          python - <<'PY'
+          from pathlib import Path
+          required = [
+              "AScript/RavenGPT/main.py",
+              "AScript/RavenGPT/config.py",
+              "AScript/RavenGPT/res/raven.param",
+              "AScript/RavenGPT/res/raven.bin",
+              "AScript/RavenGPT/res/data.yaml",
+              "AScript/RavenGPT/ui/index.html",
+          ]
+          for p in required:
+              q = Path(p)
+              assert q.exists() and q.stat().st_size > 0, p
+          print("RAVENGPT_PACKAGE_OK")
+          PY
+
+      - name: Build ZIP and IAS
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import zipfile
+          root = Path("AScript/RavenGPT")
+          out_dir = Path("dist")
+          out_dir.mkdir(exist_ok=True)
+
+          with zipfile.ZipFile(out_dir / "RavenGPT_AScript_READY.zip", "w", zipfile.ZIP_DEFLATED) as z:
+              for p in root.rglob("*"):
+                  if p.is_file() and "__pycache__" not in p.parts and not p.name.endswith(".pyc"):
+                      z.write(p, Path("RavenGPT") / p.relative_to(root))
+
+          with zipfile.ZipFile(out_dir / "RavenGPT_AScript_READY.ias", "w", zipfile.ZIP_DEFLATED) as z:
+              for p in root.rglob("*"):
+                  if p.is_file() and "__pycache__" not in p.parts and not p.name.endswith(".pyc"):
+                      z.write(p, p.relative_to(root))
+
+          print("Built", *(str(p) for p in out_dir.iterdir()))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RavenGPT-AScript-Ready
+          path: dist/*
+          if-no-files-found: error
