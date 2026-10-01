@@ -153,7 +153,9 @@ class RavenDetector:
         y1 = max(0, min(h - 2, y1))
         x2 = max(x1 + 2, min(w, x2))
         y2 = max(y1 + 2, min(h, y2))
-        crop = frame[y1:y2, x1:x2]
+        # Native AScript/NCNN expects a contiguous CV buffer. NumPy ROI slices
+        # are commonly non-contiguous views, which can produce empty inference.
+        crop = frame[y1:y2, x1:x2].copy()
         if crop is None or crop.size == 0:
             return []
 
