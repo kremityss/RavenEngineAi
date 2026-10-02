@@ -4,20 +4,35 @@ import CoreVideo
 import ImageIO
 import Vision
 
+struct RavenDetection {
+    let label: String
+    let confidence: Double
+    let boundingBox: CGRect
+}
+
 struct RavenInferenceStats {
     let modelLoaded: Bool
     let completedFrames: UInt64
     let droppedFrames: UInt64
-    let detections: Int
+    let detections: [RavenDetection]
     let inferenceMs: Double
     let modelFPS: Double
     let target: RavenAimTarget?
+    let performanceOK: Bool
 }
 
 final class RavenInferenceEngine {
-    private let queue = DispatchQueue(label: "Raven.Inference", qos: .userInteractive)
+    static let targetFPS: Double = 30
+    static let stretchTargetFPS: Double = 60
+
+    private let queue = DispatchQueue(
+        label: "Raven.Inference",
+        qos: .userInteractive,
+        autoreleaseFrequency: .workItem
+    )
     private let stateLock = NSLock()
     private let targeting = RavenTargetingEngine()
+    private let sequenceHandler = VNSequenceRequestHandler()
 
     private var request: VNCoreMLRequest?
     private var busy = false
@@ -34,6 +49,13 @@ final class RavenInferenceEngine {
     var isModelLoaded: Bool {
         request != nil
     }
+
+    func updateSettings(_ payload: [String: Any]) {
+        queue.async { [weak self] in
+            self?.targeting.update(from: payload)
+        }
+    }
+
     func submit(
         pixelBuffer: CVPixelBuffer,
         orientation: CGImagePropertyOrientation,
@@ -53,26 +75,37 @@ final class RavenInferenceEngine {
             defer { self.markIdle() }
 
             guard let request = self.request else {
-                completion(self.snapshot(detections: 0, inferenceMs: 0, target: nil))
+                completion(self.snapshot(detections: [], inferenceMs: 0, target: nil))
                 return
             }
 
             let started = CFAbsoluteTimeGetCurrent()
-            let handler = VNImageRequestHandler(
-                cvPixelBuffer: pixelBuffer,
-                orientation: orientation,
-                options: [:]
-            )
 
             do {
-                try handler.perform([request])
+                // Reusing VNSequenceRequestHandler avoids rebuilding a Vision
+                // handler for every ReplayKit frame.
+                try autoreleasepool {
+                    try self.sequenceHandler.perform(
+                        [request],
+                        on: pixelBuffer,
+                        orientation: orientation
+                    )
+                }
             } catch {
-                completion(self.snapshot(detections: 0, inferenceMs: 0, target: nil))
+                completion(self.snapshot(detections: [], inferenceMs: 0, target: nil))
                 return
             }
 
             let elapsedMs = (CFAbsoluteTimeGetCurrent() - started) * 1_000
             let observations = request.results as? [VNRecognizedObjectObservation] ?? []
+            let detections = observations.compactMap { observation -> RavenDetection? in
+                guard let label = observation.labels.first else { return nil }
+                return RavenDetection(
+                    label: label.identifier,
+                    confidence: Double(label.confidence),
+                    boundingBox: observation.boundingBox
+                )
+            }
             let target = self.targeting.select(from: observations)
 
             self.stateLock.lock()
@@ -80,7 +113,7 @@ final class RavenInferenceEngine {
             self.fpsWindowFrames &+= 1
             let now = CFAbsoluteTimeGetCurrent()
             let window = now - self.fpsWindowStart
-            if window >= 1 {
+            if window >= 1.0 {
                 self.measuredFPS = Double(self.fpsWindowFrames) / window
                 self.fpsWindowFrames = 0
                 self.fpsWindowStart = now
@@ -88,12 +121,13 @@ final class RavenInferenceEngine {
             self.stateLock.unlock()
 
             completion(self.snapshot(
-                detections: observations.count,
+                detections: detections,
                 inferenceMs: elapsedMs,
                 target: target
             ))
         }
     }
+
     private func makeRequest() -> VNCoreMLRequest? {
         let bundles = [Bundle.main, Bundle(for: RavenInferenceEngine.self)]
         let modelURL = bundles.compactMap {
@@ -104,19 +138,25 @@ final class RavenInferenceEngine {
 
         do {
             let configuration = MLModelConfiguration()
-            configuration.computeUnits = .all
+            // Keep the game GPU free. Heavy inference stays eligible for ANE,
+            // with CPU used only for unsupported glue ops.
+            configuration.computeUnits = .cpuAndNeuralEngine
+            configuration.preferBackgroundProcessing = false
+
             let model = try MLModel(contentsOf: modelURL, configuration: configuration)
             let visionModel = try VNCoreMLModel(for: model)
             let request = VNCoreMLRequest(model: visionModel)
             request.imageCropAndScaleOption = .scaleFill
+            request.preferBackgroundProcessing = false
             return request
         } catch {
+            print("RavenDetector load failed: \(error)")
             return nil
         }
     }
 
     private func snapshot(
-        detections: Int,
+        detections: [RavenDetection],
         inferenceMs: Double,
         target: RavenAimTarget?
     ) -> RavenInferenceStats {
@@ -129,7 +169,8 @@ final class RavenInferenceEngine {
             detections: detections,
             inferenceMs: inferenceMs,
             modelFPS: measuredFPS,
-            target: target
+            target: target,
+            performanceOK: measuredFPS >= Self.targetFPS
         )
     }
 
