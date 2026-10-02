@@ -1,6 +1,7 @@
 import Foundation
 import CoreML
 import CoreVideo
+import ImageIO
 import Vision
 
 struct RavenInferenceStats {
@@ -10,11 +11,13 @@ struct RavenInferenceStats {
     let detections: Int
     let inferenceMs: Double
     let modelFPS: Double
+    let target: RavenAimTarget?
 }
 
 final class RavenInferenceEngine {
     private let queue = DispatchQueue(label: "Raven.Inference", qos: .userInteractive)
     private let stateLock = NSLock()
+    private let targeting = RavenTargetingEngine()
 
     private var request: VNCoreMLRequest?
     private var busy = false
@@ -31,9 +34,9 @@ final class RavenInferenceEngine {
     var isModelLoaded: Bool {
         request != nil
     }
-
     func submit(
         pixelBuffer: CVPixelBuffer,
+        orientation: CGImagePropertyOrientation,
         completion: @escaping (RavenInferenceStats) -> Void
     ) {
         stateLock.lock()
@@ -50,26 +53,27 @@ final class RavenInferenceEngine {
             defer { self.markIdle() }
 
             guard let request = self.request else {
-                completion(self.snapshot(detections: 0, inferenceMs: 0))
+                completion(self.snapshot(detections: 0, inferenceMs: 0, target: nil))
                 return
             }
 
             let started = CFAbsoluteTimeGetCurrent()
             let handler = VNImageRequestHandler(
                 cvPixelBuffer: pixelBuffer,
-                orientation: .up,
+                orientation: orientation,
                 options: [:]
             )
 
             do {
                 try handler.perform([request])
             } catch {
-                completion(self.snapshot(detections: 0, inferenceMs: 0))
+                completion(self.snapshot(detections: 0, inferenceMs: 0, target: nil))
                 return
             }
 
             let elapsedMs = (CFAbsoluteTimeGetCurrent() - started) * 1_000
-            let detections = (request.results as? [VNRecognizedObjectObservation])?.count ?? 0
+            let observations = request.results as? [VNRecognizedObjectObservation] ?? []
+            let target = self.targeting.select(from: observations)
 
             self.stateLock.lock()
             self.completedFrames &+= 1
@@ -83,19 +87,25 @@ final class RavenInferenceEngine {
             }
             self.stateLock.unlock()
 
-            completion(self.snapshot(detections: detections, inferenceMs: elapsedMs))
+            completion(self.snapshot(
+                detections: observations.count,
+                inferenceMs: elapsedMs,
+                target: target
+            ))
         }
     }
-
     private func makeRequest() -> VNCoreMLRequest? {
-        guard let url = Bundle.main.url(forResource: "RavenDetector", withExtension: "mlmodelc") else {
-            return nil
-        }
+        let bundles = [Bundle.main, Bundle(for: RavenInferenceEngine.self)]
+        let modelURL = bundles.compactMap {
+            $0.url(forResource: "RavenDetector", withExtension: "mlmodelc")
+        }.first
+
+        guard let modelURL else { return nil }
 
         do {
             let configuration = MLModelConfiguration()
             configuration.computeUnits = .all
-            let model = try MLModel(contentsOf: url, configuration: configuration)
+            let model = try MLModel(contentsOf: modelURL, configuration: configuration)
             let visionModel = try VNCoreMLModel(for: model)
             let request = VNCoreMLRequest(model: visionModel)
             request.imageCropAndScaleOption = .scaleFill
@@ -105,7 +115,11 @@ final class RavenInferenceEngine {
         }
     }
 
-    private func snapshot(detections: Int, inferenceMs: Double) -> RavenInferenceStats {
+    private func snapshot(
+        detections: Int,
+        inferenceMs: Double,
+        target: RavenAimTarget?
+    ) -> RavenInferenceStats {
         stateLock.lock()
         defer { stateLock.unlock() }
         return RavenInferenceStats(
@@ -114,7 +128,8 @@ final class RavenInferenceEngine {
             droppedFrames: droppedFrames,
             detections: detections,
             inferenceMs: inferenceMs,
-            modelFPS: measuredFPS
+            modelFPS: measuredFPS,
+            target: target
         )
     }
 
