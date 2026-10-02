@@ -141,7 +141,6 @@ final class RavenInferenceEngine {
             // Keep the game GPU free. Heavy inference stays eligible for ANE,
             // with CPU used only for unsupported glue ops.
             configuration.computeUnits = .cpuAndNeuralEngine
-            configuration.preferBackgroundProcessing = false
 
             let model = try MLModel(contentsOf: modelURL, configuration: configuration)
             let visionModel = try VNCoreMLModel(for: model)
