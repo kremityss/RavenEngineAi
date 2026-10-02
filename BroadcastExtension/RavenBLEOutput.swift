@@ -6,15 +6,25 @@ final class RavenBLEOutput: NSObject {
         case unavailable, scanning, connecting, connected
     }
 
-    static let serviceUUID = CBUUID(string: "7F8A0001-7D8E-4A31-9D4A-524156454E01")
-    static let commandUUID = CBUUID(string: "7F8A0002-7D8E-4A31-9D4A-524156454E01")
+    // Match the ESP32-S3 firmware already flashed on the Raven N16R8 board.
+    static let serviceUUID = CBUUID(string: "4fafc201-1fb5-459e-8fcc-c5c9c331914b")
+    static let commandUUID = CBUUID(string: "beb5483e-36e1-4688-b7f5-ea07361b26a8")
 
     private let queue = DispatchQueue(label: "Raven.Broadcast.BLE", qos: .userInteractive)
     private var central: CBCentralManager!
     private var peripheral: CBPeripheral?
     private var command: CBCharacteristic?
-    private var sequence: UInt16 = 0
     private(set) var state: State = .unavailable
+
+    // Mirrors the working AScript controller defaults.
+    private var strength: Double = 0.72
+    private var sensitivityX: Double = 0.42
+    private var sensitivityY: Double = 0.42
+    private var maxStepXRatio: Double = 0.045
+    private var maxStepYRatio: Double = 0.095
+    private var swipeMs: Int = 45
+    private var lookAnchorX: Double = 0.78
+    private var lookAnchorY: Double = 0.50
 
     override init() {
         super.init()
@@ -39,6 +49,31 @@ final class RavenBLEOutput: NSObject {
             self.command = nil
         }
     }
+
+    func updateSettings(_ payload: [String: Any]) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            if let v = payload["strength"] as? NSNumber {
+                self.strength = max(0.05, min(1.0, v.doubleValue))
+            }
+            if let v = payload["sensitivity_x"] as? NSNumber {
+                self.sensitivityX = max(0.05, min(1.5, v.doubleValue))
+            }
+            if let v = payload["sensitivity_y"] as? NSNumber {
+                self.sensitivityY = max(0.05, min(1.5, v.doubleValue))
+            }
+            if let v = payload["swipe_ms"] as? NSNumber {
+                self.swipeMs = max(5, min(120, v.intValue))
+            }
+            if let v = payload["look_anchor_x"] as? NSNumber {
+                self.lookAnchorX = max(0.55, min(0.95, v.doubleValue))
+            }
+            if let v = payload["look_anchor_y"] as? NSNumber {
+                self.lookAnchorY = max(0.20, min(0.80, v.doubleValue))
+            }
+        }
+    }
+
     func send(target: RavenAimTarget) {
         queue.async { [weak self] in
             guard let self,
@@ -46,16 +81,30 @@ final class RavenBLEOutput: NSObject {
                   let peripheral = self.peripheral,
                   let command = self.command else { return }
 
-            self.sequence &+= 1
-            let dx = Int16(clamping: Int((target.dx * 32767.0).rounded()))
-            let dy = Int16(clamping: Int((target.dy * 32767.0).rounded()))
-            let confidence = UInt8(clamping: Int((target.confidence * 255.0).rounded()))
-            let payload = self.makePacket(sequence: self.sequence, dx: dx, dy: dy, confidence: confidence)
+            // The flashed firmware accepts ASCII ABS swipe commands:
+            //   slide x0 y0 x1 y1 durationMs
+            // Convert the normalized aim error into the same look-anchor motion
+            // used by the working AScript controller.
+            let gainX = self.strength * self.sensitivityX
+            let gainY = self.strength * self.sensitivityY
+            let stepX = max(-self.maxStepXRatio, min(self.maxStepXRatio, target.dx * gainX))
+            let stepY = max(-self.maxStepYRatio, min(self.maxStepYRatio, target.dy * gainY))
 
+            let ax = self.hid(self.lookAnchorX)
+            let ay = self.hid(self.lookAnchorY)
+            let bx = self.hid(self.lookAnchorX + stepX)
+            let by = self.hid(self.lookAnchorY + stepY)
+
+            let text = "slide \(ax) \(ay) \(bx) \(by) \(self.swipeMs)"
+            let payload = Data(text.utf8)
             let type: CBCharacteristicWriteType = command.properties.contains(.writeWithoutResponse)
                 ? .withoutResponse : .withResponse
             peripheral.writeValue(payload, for: command, type: type)
         }
+    }
+
+    private func hid(_ normalized: Double) -> Int {
+        Int((max(0.0, min(1.0, normalized)) * 32767.0).rounded())
     }
 
     private func scan() {
@@ -66,23 +115,8 @@ final class RavenBLEOutput: NSObject {
             options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
         )
     }
-
-    private func makePacket(sequence: UInt16, dx: Int16, dy: Int16, confidence: UInt8) -> Data {
-        var bytes: [UInt8] = [0x52, 0x56, 0x01, 0x10]
-        appendLE(sequence, to: &bytes)
-        appendLE(UInt16(bitPattern: dx), to: &bytes)
-        appendLE(UInt16(bitPattern: dy), to: &bytes)
-        bytes.append(confidence)
-        bytes.append(0x01)
-        bytes.append(bytes.reduce(0, ^))
-        return Data(bytes)
-    }
-
-    private func appendLE(_ value: UInt16, to bytes: inout [UInt8]) {
-        bytes.append(UInt8(value & 0x00FF))
-        bytes.append(UInt8((value >> 8) & 0x00FF))
-    }
 }
+
 extension RavenBLEOutput: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         guard central.state == .poweredOn else {
@@ -129,6 +163,7 @@ extension RavenBLEOutput: CBCentralManagerDelegate {
         scan()
     }
 }
+
 extension RavenBLEOutput: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         guard error == nil else {
