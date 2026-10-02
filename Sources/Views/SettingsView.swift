@@ -5,6 +5,12 @@ struct SettingsView: View {
     @AppStorage("raven.haptics") private var haptics = true
     @AppStorage("raven.autoReconnect") private var autoReconnect = true
 
+    private var versionLabel: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
+        return "\(version) (\(build))"
+    }
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -19,7 +25,7 @@ struct SettingsView: View {
                     }
                     Section("Build") {
                         LabeledContent("Channel", value: "Native iOS")
-                        LabeledContent("Version", value: "0.1.0")
+                        LabeledContent("Version", value: versionLabel)
                         LabeledContent("Protocol", value: "RavenLink v1")
                     }
                 }
