@@ -19,6 +19,8 @@ targets:
     platform: iOS
     sources:
       - BroadcastExtension
+      - path: Resources/RavenDetector.mlpackage
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kremcheats.RavenEngineAI.broadcast
@@ -30,6 +32,7 @@ targets:
       - sdk: ReplayKit.framework
       - sdk: CoreMedia.framework
       - sdk: CoreVideo.framework
+      - sdk: CoreBluetooth.framework
       - sdk: Vision.framework
       - sdk: CoreML.framework
 

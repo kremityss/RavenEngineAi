@@ -7,6 +7,7 @@ on:
     paths:
       - "Sources/**"
       - "BroadcastExtension/**"
+      - "RavenModelPackage_Upload.zip"
       - "Config/**"
       - "project.yml"
       - ".github/workflows/build-ios.yml"
@@ -31,6 +32,17 @@ jobs:
           xcodebuild -version
           brew install xcodegen
 
+      - name: Restore Core ML model
+        run: |
+          set -euxo pipefail
+          rm -rf Resources /tmp/raven-model
+          mkdir -p Resources /tmp/raven-model
+          unzip -q RavenModelPackage_Upload.zip -d /tmp/raven-model
+          cp -R /tmp/raven-model/Resources/RavenModelPackage Resources/RavenDetector.mlpackage
+          test -f Resources/RavenDetector.mlpackage/Manifest.json
+          test -f Resources/RavenDetector.mlpackage/Data/com.apple.CoreML/model.mlmodel
+          test -f Resources/RavenDetector.mlpackage/Data/com.apple.CoreML/weights/weight.bin
+
       - name: Generate project
         run: |
           set -euxo pipefail
@@ -51,9 +63,12 @@ jobs:
           rm -rf dist/Payload
           mkdir -p dist/Payload
           cp -R "$APP_PATH" dist/Payload/
+          test -d "dist/Payload/RavenEngineAI.app/PlugIns/RavenBroadcast.appex"
+          find "dist/Payload/RavenEngineAI.app/PlugIns/RavenBroadcast.appex" -name 'RavenDetector.mlmodelc' -type d | grep -q .
           cd dist
           /usr/bin/zip -qry RavenEngineAI-unsigned.ipa Payload
-          /usr/bin/unzip -l RavenEngineAI-unsigned.ipa | head -80
+          shasum -a 256 RavenEngineAI-unsigned.ipa > RavenEngineAI-unsigned.ipa.sha256
+          /usr/bin/unzip -l RavenEngineAI-unsigned.ipa | head -120
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
@@ -61,6 +76,7 @@ jobs:
           name: RavenEngineAI-unsigned-ipa
           path: |
             dist/RavenEngineAI-unsigned.ipa
+            dist/RavenEngineAI-unsigned.ipa.sha256
             build/xcodebuild.log
           if-no-files-found: error
           retention-days: 14
