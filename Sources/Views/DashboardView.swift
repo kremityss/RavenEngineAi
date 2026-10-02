@@ -53,7 +53,7 @@ struct DashboardView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("RAVEN ENGINE AI")
                     .font(.system(size: 22, weight: .black, design: .rounded))
-                Text("NATIVE iOS CONTROL CORE • BUILD 0.1.1")
+                Text("NATIVE iOS CONTROL CORE • \(buildLabel)")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(RavenTheme.textSecondary)
             }
@@ -63,6 +63,12 @@ struct DashboardView: View {
                 .frame(width: 12, height: 12)
                 .shadow(color: RavenTheme.accent.opacity(appState.sessionActive ? 0.8 : 0), radius: 8)
         }
+    }
+
+    private var buildLabel: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
+        return "v\(version) • BUILD \(build)"
     }
 
     private var sessionCard: some View {
