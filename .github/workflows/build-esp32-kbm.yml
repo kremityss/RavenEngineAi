@@ -1,0 +1,42 @@
+name: Build ESP32-S3 KBM Mapper
+
+on:
+  push:
+    branches: [ascript-esp32-kbm]
+    paths:
+      - 'esp32-n16r8/**'
+      - '.github/workflows/build-esp32-kbm.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install PlatformIO
+        run: pip install platformio
+      - name: Build firmware
+        working-directory: esp32-n16r8
+        run: pio run
+      - name: Package flash files
+        run: |
+          mkdir -p artifact
+          cp esp32-n16r8/.pio/build/yd_n16r8/firmware.bin artifact/
+          cp esp32-n16r8/.pio/build/yd_n16r8/bootloader.bin artifact/
+          cp esp32-n16r8/.pio/build/yd_n16r8/partitions.bin artifact/
+          cp esp32-n16r8/.pio/build/yd_n16r8/boot_app0.bin artifact/ || true
+          cat > artifact/FLASH.txt <<'EOF'
+          ESP32-S3 N16R8 flash layout:
+          0x0000 bootloader.bin
+          0x8000 partitions.bin
+          0x10000 firmware.bin
+          If boot_app0.bin is present: 0xE000 boot_app0.bin
+          EOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Raven-KBM-ESP32-S3
+          path: artifact
+          retention-days: 14
