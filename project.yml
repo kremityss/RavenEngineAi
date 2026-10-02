@@ -41,6 +41,8 @@ targets:
     platform: iOS
     sources:
       - Sources
+      - path: Resources/RavenDetector.mlpackage
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kremcheats.RavenEngineAI
