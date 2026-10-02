@@ -64,7 +64,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
     }
 
     private func videoOrientation(from sampleBuffer: CMSampleBuffer) -> CGImagePropertyOrientation {
-        var mode: CMAttachmentMode = .shouldNotPropagate
+        var mode: CMAttachmentMode = kCMAttachmentMode_ShouldNotPropagate
         guard let value = CMGetAttachment(
             sampleBuffer,
             key: RPVideoSampleOrientationKey as CFString,
