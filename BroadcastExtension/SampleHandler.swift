@@ -39,6 +39,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
         liveServer.onConfig = { [weak self] payload in
             guard let self else { return }
             self.inference.updateSettings(payload)
+            self.bleOutput.updateSettings(payload)
             if let enabled = payload["aim_enabled"] as? Bool {
                 self.stateLock.lock()
                 self.aimEnabled = enabled
