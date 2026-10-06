@@ -1,0 +1,92 @@
+name: Build RavenGPT Mobile Latest IAS
+
+on:
+  push:
+    branches: [ravengpt-mobile-latest-delivery]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Restore verified latest Raven source
+        run: |
+          mkdir -p build
+          base64 -d delivery/ravengpt_mobile_latest_text.tar.gz.b64 | tar -xzf - -C build
+          test "$(sha256sum build/engine.py | cut -d' ' -f1)" = "38014ff5259f1207d2c7a0e34dfa25aa718a010bfec246ff928c3a0295ef78b2"
+          test "$(sha256sum build/cursor_runtime.py | cut -d' ' -f1)" = "f45c83351d6a250bb5863d13599b8ab6678fb893d2e9f89e6b78a3dcb0193ae5"
+          test "$(sha256sum build/mobile_panel.py | cut -d' ' -f1)" = "b77f16a93565754325bd80d8930fa7e88524b8b6ca556de5a08a716e92c119a4"
+          test "$(sha256sum build/ui/index.html | cut -d' ' -f1)" = "7cbc72f14f127127af5e44daf79e2f2f487fa3a78caca83b75e3647d48f788dd"
+          test "$(sha256sum build/res/raven.param | cut -d' ' -f1)" = "346093c80049ed50532dbba802937186baca435ce76ae6c3fb5ded63799b1d5c"
+
+      - name: Install exact NCNN exporter stack
+        run: |
+          python -m pip install --upgrade pip
+          pip install ultralytics==8.4.55 pyyaml ncnn==1.0.20260526 pnnx==20260526
+
+      - name: Download Raven custom weights
+        run: |
+          curl -L --fail --retry 3 -o weights-4.pt "https://raw.githubusercontent.com/kremityss/Weights/main/weights%204.pt"
+          test -s weights-4.pt
+
+      - name: Export 128 FP16 NCNN model
+        run: |
+          python - <<'PY'
+          from ultralytics import YOLO
+          model = YOLO('weights-4.pt')
+          out = model.export(format='ncnn', imgsz=128, half=True, batch=1, device='cpu')
+          print('EXPORT_DIR', out)
+          PY
+          test -f weights-4_ncnn_model/model.ncnn.bin
+          test -f weights-4_ncnn_model/model.ncnn.param
+          cp weights-4_ncnn_model/model.ncnn.bin build/res/raven.bin
+          echo "MODEL_BIN_SHA=$(sha256sum build/res/raven.bin | cut -d' ' -f1)"
+          echo "MODEL_PARAM_SHA=$(sha256sum weights-4_ncnn_model/model.ncnn.param | cut -d' ' -f1)"
+          test "$(sha256sum build/res/raven.bin | cut -d' ' -f1)" = "5446731e6afb9605ef1c60fac66338c2006595a14f97a41e061b0215965a7132"
+          test "$(sha256sum weights-4_ncnn_model/model.ncnn.param | cut -d' ' -f1)" = "346093c80049ed50532dbba802937186baca435ce76ae6c3fb5ded63799b1d5c"
+
+      - name: Verify and build IAS
+        run: |
+          python -m compileall -q build
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib, zipfile
+          root = Path('build')
+          required = [
+              'VERSION.txt','__init__.py','cursor_runtime.py','engine.py','main.py',
+              'mobile_panel.py','raven_config.json','ui/index.html','res/data.yaml',
+              'res/raven.param','res/raven.bin'
+          ]
+          for rel in required:
+              p=root/rel
+              assert p.exists() and p.stat().st_size > 0, rel
+          out=Path('dist/RavenGPT_MOBILE_LATEST.ias')
+          out.parent.mkdir(exist_ok=True)
+          with zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED,compresslevel=9) as z:
+              for p in sorted(root.rglob('*')):
+                  if p.is_file() and '__pycache__' not in p.parts and not p.name.endswith('.pyc'):
+                      z.write(p,p.relative_to(root))
+          with zipfile.ZipFile(out) as z:
+              assert z.testzip() is None
+              names=set(z.namelist())
+              assert all(x in names for x in required)
+              assert hashlib.sha256(z.read('res/raven.bin')).hexdigest() == '5446731e6afb9605ef1c60fac66338c2006595a14f97a41e061b0215965a7132'
+              assert hashlib.sha256(z.read('engine.py')).hexdigest() == '38014ff5259f1207d2c7a0e34dfa25aa718a010bfec246ff928c3a0295ef78b2'
+          print('IAS_SIZE',out.stat().st_size)
+          print('IAS_SHA256',hashlib.sha256(out.read_bytes()).hexdigest())
+          print('IAS_OK')
+          PY
+          unzip -t dist/RavenGPT_MOBILE_LATEST.ias
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RavenGPT-MOBILE-LATEST-IAS
+          path: dist/RavenGPT_MOBILE_LATEST.ias
+          if-no-files-found: error
+          retention-days: 30
