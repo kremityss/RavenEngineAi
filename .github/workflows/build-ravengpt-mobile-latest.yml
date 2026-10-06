@@ -25,10 +25,17 @@ jobs:
           test "$(sha256sum build/ui/index.html | cut -d' ' -f1)" = "7cbc72f14f127127af5e44daf79e2f2f487fa3a78caca83b75e3647d48f788dd"
           test "$(sha256sum build/res/raven.param | cut -d' ' -f1)" = "346093c80049ed50532dbba802937186baca435ce76ae6c3fb5ded63799b1d5c"
 
-      - name: Install exact NCNN exporter stack
+      - name: Install Chromebook-matching CPU exporter stack
         run: |
           python -m pip install --upgrade pip
+          pip install torch==2.14.1 torchvision==0.29.1 --index-url https://download.pytorch.org/whl/cpu
           pip install ultralytics==8.4.55 pyyaml ncnn==1.0.20260526 pnnx==20260526
+          python - <<'PY'
+          import torch, ultralytics
+          print('TORCH', torch.__version__)
+          print('ULTRALYTICS', ultralytics.__version__)
+          assert '+cpu' in torch.__version__
+          PY
 
       - name: Download Raven custom weights
         run: |
