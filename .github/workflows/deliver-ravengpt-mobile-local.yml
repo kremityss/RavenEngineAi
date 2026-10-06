@@ -1,0 +1,106 @@
+name: Deliver RavenGPT Mobile Latest Local
+
+on:
+  push:
+    branches:
+      - deliver-ravengpt-mobile-latest
+    paths:
+      - '.github/workflows/deliver-ravengpt-mobile-local.yml'
+      - '.delivery/mobile_bundle_parts/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout delivery branch
+        uses: actions/checkout@v4
+
+      - name: Restore verified mobile sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/RavenGPT_MOBILE_LATEST
+          cat .delivery/mobile_bundle_parts/part00 \
+              .delivery/mobile_bundle_parts/part01 \
+              .delivery/mobile_bundle_parts/part02 \
+              .delivery/mobile_bundle_parts/part03 \
+              .delivery/mobile_bundle_parts/part04 > build/mobile_bundle.b64
+          test "$(wc -c < build/mobile_bundle.b64)" = "38376"
+          test "$(sha256sum build/mobile_bundle.b64 | awk '{print $1}')" = "1de44b5bd19405b6b131985208a7c2195f6d407f1f61bb9ff381e4ecb4a63d3d"
+          base64 -d build/mobile_bundle.b64 > build/mobile_bundle.tar.gz
+          tar -xzf build/mobile_bundle.tar.gz -C build/RavenGPT_MOBILE_LATEST
+
+          test "$(sha256sum build/RavenGPT_MOBILE_LATEST/engine.py | awk '{print $1}')" = "38014ff5259f1207d2c7a0e34dfa25aa718a010bfec246ff928c3a0295ef78b2"
+          test "$(sha256sum build/RavenGPT_MOBILE_LATEST/cursor_runtime.py | awk '{print $1}')" = "f45c83351d6a250bb5863d13599b8ab6678fb893d2e9f89e6b78a3dcb0193ae5"
+          test "$(sha256sum build/RavenGPT_MOBILE_LATEST/raven_config.json | awk '{print $1}')" = "3135a00c2155553978981f8fa467d4aeacc5cf7e07b347d1011c392791c5ff47"
+          test "$(sha256sum build/RavenGPT_MOBILE_LATEST/res/raven.param | awk '{print $1}')" = "346093c80049ed50532dbba802937186baca435ce76ae6c3fb5ded63799b1d5c"
+
+      - name: Reconstruct verified NCNN model
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .ravenbin_parts/part00 \
+              .ravenbin_parts/part01 \
+              .ravenbin_parts/part02 \
+              .ravenbin_parts/part03 \
+              .ravenbin_parts/part04 \
+              .ravenbin_parts/part05 \
+              .ravenbin_parts/part06 \
+              .ravenbin_parts/part07 \
+              .ravenbin_parts/part08 \
+              .ravenbin_parts/part09 \
+              .ravenbin_parts/part10 > build/RavenGPT_MOBILE_LATEST/res/raven.bin
+          test "$(wc -c < build/RavenGPT_MOBILE_LATEST/res/raven.bin)" = "5223400"
+          test "$(sha256sum build/RavenGPT_MOBILE_LATEST/res/raven.bin | awk '{print $1}')" = "5446731e6afb9605ef1c60fac66338c2006595a14f97a41e061b0215965a7132"
+
+      - name: Build and verify IAS
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, zipfile
+
+          root = Path('build/RavenGPT_MOBILE_LATEST')
+          out = Path('dist/RavenGPT_MOBILE_LATEST.ias')
+          required = [
+              'VERSION.txt','__init__.py','cursor_runtime.py','engine.py','main.py',
+              'mobile_panel.py','raven_config.json','res/data.yaml','res/raven.bin',
+              'res/raven.param','ui/index.html'
+          ]
+          for rel in required:
+              p = root / rel
+              assert p.is_file() and p.stat().st_size > 0, rel
+
+          with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
+              for p in sorted(root.rglob('*')):
+                  if p.is_file() and '__pycache__' not in p.parts and p.suffix != '.pyc':
+                      z.write(p, p.relative_to(root).as_posix())
+
+          with zipfile.ZipFile(out, 'r') as z:
+              assert z.testzip() is None
+              names = set(z.namelist())
+              for rel in required:
+                  assert rel in names, rel
+              model = z.read('res/raven.bin')
+              assert len(model) == 5223400
+              assert hashlib.sha256(model).hexdigest() == '5446731e6afb9605ef1c60fac66338c2006595a14f97a41e061b0215965a7132'
+              engine = z.read('engine.py')
+              assert hashlib.sha256(engine).hexdigest() == '38014ff5259f1207d2c7a0e34dfa25aa718a010bfec246ff928c3a0295ef78b2'
+          print('IAS_SIZE', out.stat().st_size)
+          print('IAS_SHA256', hashlib.sha256(out.read_bytes()).hexdigest())
+          print('RAVENGPT_MOBILE_IAS_OK')
+          PY
+
+      - name: Upload RavenGPT IAS
+        uses: actions/upload-artifact@v4
+        with:
+          name: RavenGPT_MOBILE_LATEST
+          path: dist/RavenGPT_MOBILE_LATEST.ias
+          if-no-files-found: error
+          compression-level: 0
